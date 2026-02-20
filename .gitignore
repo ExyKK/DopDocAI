@@ -87,3 +87,18 @@ go.work.sum
 # === Coverage ===
 coverage.out
 coverage.html
+
+# Build folders
+**/bin/
+**/obj/
+
+# Rider
+.idea/
+*.sln.iml
+*.DotSettings.user
+*.user
+
+# NuGet
+*.nupkg
+project.assets.json
+project.nuget.cache

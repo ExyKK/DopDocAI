@@ -1,0 +1,6 @@
+<Project>
+    <PropertyGroup>
+        <!-- Workaround for NETSDK1226 in some .NET 10 Linux distributions -->
+        <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+    </PropertyGroup>
+</Project>

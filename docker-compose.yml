@@ -272,21 +272,19 @@ services:
 
   auth_service:
     build:
-      context: backend/auth_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: src/services/DopDoc.AuthService/Dockerfile
     container_name: dopdoc_auth_service
     ports:
-      - "19500:19500"
+      - "19000:19000"
     environment:
-      HTTP_ADDR: "19500"
-      DB_DSN: postgres://dopdoc:dopdoc@postgres:5432/auth_db
-      JWT_SECRET: secret
-      REFRESH_PEPPER: pepper
-      DOMAIN: localhost
-      SECURE: false
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: auth_service
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      LOG_LEVEL: Information
     depends_on:
-      postgres:
-        condition: service_healthy
+      otel_collector:
+        condition: service_started
 
 volumes:
   pg_data:

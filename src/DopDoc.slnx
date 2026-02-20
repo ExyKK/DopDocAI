@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/common/">
+    <Project Path="common/DopDoc.Common/DopDoc.Common.csproj" />
+  </Folder>
+  <Folder Name="/services/">
+    <Project Path="services/DopDoc.AuthService/DopDoc.AuthService.csproj" />
+  </Folder>
+</Solution>
