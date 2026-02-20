@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="INGEST_", extra="ignore")
 
     service_name: str = "ingestion_service"
-    repos_service_url: str = "http://172.17.0.1:9000"
+    repos_service_url: str = "http://172.17.0.1:19300"
     request_timeout_s: float = 10.0
 
     qdrant_url: AnyUrl = "http://172.17.0.1:6333"
@@ -19,6 +19,6 @@ class Settings(BaseSettings):
     qdrant_batch_size: int = 64
 
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 19100
 
 settings = Settings()

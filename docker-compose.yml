@@ -30,29 +30,171 @@ services:
     environment:
       - QDRANT__SERVICE__STORAGE_TYPE=rocksdb
 
+  # ---------------------------
+  # RabbitMQ (event bus)
+  # ---------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: dopdoc_rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # UI
+    environment:
+      RABBITMQ_DEFAULT_USER: dopdoc
+      RABBITMQ_DEFAULT_PASS: dopdoc
+      RABBITMQ_DEFAULT_VHOST: /
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------
+  # MinIO (S3 storage for artifacts)
+  # ---------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: dopdoc_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: dopdoc
+      MINIO_ROOT_PASSWORD: dopdocstorage
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Автосоздание бакетов (после старта MinIO)
+  minio_init:
+    image: minio/mc:latest
+    container_name: dopdoc_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 dopdoc dopdocstorage &&
+      mc mb -p local/dopdoc-artifacts || true &&
+      mc anonymous set download local/dopdoc-artifacts || true &&
+      echo 'MinIO buckets ensured.'"
+    restart: "no"
+
+  # ---------------------------
+  # Observability (Otel + Prometheus + Grafana + Loki + Tempo)
+  # ---------------------------
+  otel_collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: dopdoc_otel_collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./backend/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics export (если включим)
+    depends_on:
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dopdoc_prometheus
+    volumes:
+      - ./backend/observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      otel_collector:
+        condition: service_started
+
+  loki:
+    image: grafana/loki:latest
+    container_name: dopdoc_loki
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./backend/observability/loki.yaml:/etc/loki/config.yaml:ro
+    ports:
+      - "3100:3100"
+
+  tempo:
+    image: grafana/tempo:2.10.1
+    container_name: dopdoc_tempo
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./backend/observability/tempo.yaml:/etc/tempo/config.yaml:ro
+    ports:
+      - "3200:3200"   # Tempo HTTP
+      - "4319:4317"   # (опционально) отдельный OTLP вход в tempo
+      - "4320:4318"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dopdoc_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: dopdoc
+      GF_SECURITY_ADMIN_PASSWORD: dopdoc
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./backend/observability/grafana-provisioning:/etc/grafana/provisioning
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+
+  # ---------------------------
+  # Microservices
+  # ---------------------------
   ingestion_service:
     build:
       context: .
       dockerfile: backend/ingestion_service/Dockerfile.dev
     container_name: dopdoc_ingestion_service
     environment:
-      INGEST_REPOS_SERVICE_URL: http://repos_service:9000
+      INGEST_REPOS_SERVICE_URL: http://repos_service:19300
       INGEST_QDRANT_URL: http://qdrant:6333
       INGEST_QDRANT_API_KEY: ""
-      INGEST_HOST: 0.0.0.0
-      INGEST_PORT: 8000
+      INGEST_PORT: 19100
+
+      # RabbitMQ (будет использоваться, когда переведём ingest на consumer)
+      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
+      DOPDOC_RABBITMQ_EXCHANGE_COMMANDS: dopdoc.commands
+      DOPDOC_RABBITMQ_EXCHANGE_EVENTS: dopdoc.events
+
+      # MinIO (артефакты типа go_symbols.json, опционально)
+      DOPDOC_S3_ENDPOINT: http://minio:9000
+      DOPDOC_S3_ACCESS_KEY: dopdoc
+      DOPDOC_S3_SECRET_KEY: dopdocstorage
+      DOPDOC_S3_BUCKET: dopdoc-artifacts
+      DOPDOC_S3_REGION: us-east-1
+
+      # OTEL (позже подключим в коде)
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: ingestion_service
+
       # ML params
       INGEST_JINA_MODEL: jinaai/jina-code-embeddings-0.5b
       INGEST_MAX_TOKENS: "512"
       INGEST_OVERLAP: "64"
       INGEST_VECTOR_SIZE: "896"
       INGEST_QDRANT_BATCH_SIZE: "64"
-      # huggingface cache
       HF_HOME: /hf_cache
       TRANSFORMERS_CACHE: /hf_cache/transformers
       SENTENCE_TRANSFORMERS_HOME: /hf_cache/sentence_transformers
     ports:
-      - "8000:8000"
+      - "19100:19100"
     volumes:
       - ./backend/ingestion_service:/app/backend/ingestion_service
       - hf_cache:/hf_cache
@@ -61,6 +203,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
 
   repos_service:
     build:
@@ -70,14 +214,22 @@ services:
     environment:
       REPOS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
       REPOS_DB_SCHEMA: "repos"
-      REPOS_HOST: 0.0.0.0
-      REPOS_PORT: 9000
+      REPOS_PORT: 19300
+
+      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
+      DOPDOC_RABBITMQ_EXCHANGE_COMMANDS: dopdoc.commands
+      DOPDOC_RABBITMQ_EXCHANGE_EVENTS: dopdoc.events
+
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: repos_service
     ports:
-      - "9000:9000"
+      - "19300:19300"
     volumes:
       - ./backend/repos_service:/app/backend/repos_service
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   chats_service:
@@ -88,10 +240,9 @@ services:
     environment:
       CHATS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
       CHATS_DB_SCHEMA: "chats"
-      CHATS_REPOS_SERVICE_URL: http://repos_service:9000
-      CHATS_INGESTION_SERVICE_URL: http://ingestion_service:8000
-      CHATS_HOST: 0.0.0.0
-      CHATS_PORT: 9100
+      CHATS_REPOS_SERVICE_URL: http://repos_service:19300
+      CHATS_INGESTION_SERVICE_URL: http://ingestion_service:19100
+      CHATS_PORT: 19400
 
       CHATS_LLM_ROUTER_API: https://openrouter.ai/api/v1/chat/completions
       CHATS_LLM_API_KEY: ""
@@ -102,10 +253,13 @@ services:
       CHATS_LLM_REPETITION_PENALTY: "1.05"
       CHATS_LLM_HISTORY_LIMIT: "20"
       CHATS_LLM_DEFAULT_SYSTEM_PROMPT: "You are a helpful assistant."
-
       CHATS_RAG_TOP_K: "8"
+
+      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: chats_service
     ports:
-      - "9100:9100"
+      - "19400:19400"
     volumes:
       - ./backend/chats_service:/app/backend/chats_service
     depends_on:
@@ -113,6 +267,8 @@ services:
         condition: service_healthy
       ingestion_service:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
 
   auth_service:
     build:
@@ -120,9 +276,9 @@ services:
       dockerfile: Dockerfile
     container_name: dopdoc_auth_service
     ports:
-      - "9200:9200"
+      - "19500:19500"
     environment:
-      HTTP_ADDR: "9200"
+      HTTP_ADDR: "19500"
       DB_DSN: postgres://dopdoc:dopdoc@postgres:5432/auth_db
       JWT_SECRET: secret
       REFRESH_PEPPER: pepper
@@ -136,3 +292,10 @@ volumes:
   pg_data:
   qdrant_data:
   hf_cache:
+  minio_data:
+  grafana_data:
+
+networks:
+  default:
+    external: true
+    name: dopdocai_default

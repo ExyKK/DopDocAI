@@ -36,5 +36,5 @@ COPY --from=builder /usr/local /usr/local
 COPY backend/ingestion_service ./backend/ingestion_service
 WORKDIR /app/backend/ingestion_service
 
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 19100
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "19100"]

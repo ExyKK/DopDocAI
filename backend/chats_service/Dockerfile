@@ -34,6 +34,6 @@ COPY backend/chats_service ./backend/chats_service
 
 WORKDIR /app/backend/chats_service
 
-EXPOSE 9100
+EXPOSE 19400
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 9100"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 19400"]

@@ -6,15 +6,15 @@ class Settings(BaseSettings):
 
     service_name: str = "chats_service"
 
-    repos_service_url: str = "http://172.17.0.1:9000"
+    repos_service_url: str = "http://172.17.0.1:19300"
     repos_service_timeout_s: float = 5.0
-    ingestion_service_url: str = "http://172.17.0.1:8000"
+    ingestion_service_url: str = "http://172.17.0.1:19100"
 
     database_url: str = "postgresql+psycopg://dopdoc:dopdoc@172.17.0.1:5432/dopdoc"
     db_schema: str = "chats"
 
     host: str = "127.0.0.1"
-    port: int = 9100
+    port: int = 19400
 
     # LLM router
     llm_router_api: str = "https://openrouter.ai/api/v1/chat/completions"

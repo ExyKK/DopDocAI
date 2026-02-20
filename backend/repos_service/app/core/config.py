@@ -10,6 +10,6 @@ class Settings(BaseSettings):
     db_schema: str = "repos"
 
     host: str = "127.0.0.1"
-    port: int = 9000
+    port: int = 19300
 
 settings = Settings()

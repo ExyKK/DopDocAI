@@ -35,6 +35,6 @@ COPY backend/repos_service ./backend/repos_service
 
 WORKDIR /app/backend/repos_service
 
-EXPOSE 9000
+EXPOSE 19300
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 9000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 19300"]
