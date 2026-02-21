@@ -1,6 +1,7 @@
+using DopDoc.Common.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace DopDoc.AuthService.Infrastructure.Data;
 
@@ -14,16 +15,18 @@ public sealed class AuthDbContextFactory : IDesignTimeDbContextFactory<AuthDbCon
             .AddEnvironmentVariables()
             .Build();
 
-        var cs = config.GetConnectionString("AuthDb") ?? config["ConnectionStrings__AuthDb"];
+        var cs = config.GetConnectionString("AuthDb");
         if (string.IsNullOrWhiteSpace(cs))
             throw new InvalidOperationException("ConnectionStrings:AuthDb is required");
 
-        var schema = config["Db__Schema"] ?? "auth";
+        var schema = config["Db:Schema"] ?? "auth";
 
         var options = new DbContextOptionsBuilder<AuthDbContext>()
             .UseNpgsql(cs, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema))
             .Options;
         
-        return new AuthDbContext(options, config);
+        var dbOptions = Options.Create(new DbOptions { Schema = schema });
+        
+        return new AuthDbContext(options, dbOptions);
     }
 }

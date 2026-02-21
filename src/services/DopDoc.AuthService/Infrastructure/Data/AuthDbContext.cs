@@ -1,5 +1,7 @@
 using DopDoc.AuthService.Domain;
+using DopDoc.Common.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace DopDoc.AuthService.Infrastructure.Data;
 
@@ -7,9 +9,10 @@ public sealed class AuthDbContext : DbContext
 {
     private readonly string _schema;
     
-    public AuthDbContext(DbContextOptions<AuthDbContext> options, IConfiguration config) : base(options)
+    public AuthDbContext(DbContextOptions<AuthDbContext> options, IOptions<DbOptions> dbOptions) 
+        : base(options)
     {
-        _schema = config["Db__Schema"] ?? "auth";
+        _schema = dbOptions.Value.Schema;
     }
     
     public DbSet<User> Users => Set<User>();

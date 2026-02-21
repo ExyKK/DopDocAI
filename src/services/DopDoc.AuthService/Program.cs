@@ -2,17 +2,18 @@ using DopDoc.AuthService.Api;
 using DopDoc.AuthService.Application.Auth;
 using DopDoc.AuthService.Infrastructure.Data;
 using DopDoc.AuthService.Infrastructure.Security;
+using DopDoc.Common.Configuration;
 using DopDoc.Common.Health;
 using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var serviceName = builder.Configuration["OTEL_SERVICE_NAME"] ?? "auth_service";
-var schema = builder.Configuration["Db__Schema"] ?? "auth";
+var serviceName = builder.Configuration["Otel:ServiceName"] ?? "auth_service";
 
 // Serilog
 SerilogSetup.ConfigureBootstrapLogger(serviceName, builder.Configuration);
@@ -34,13 +35,22 @@ builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<AuthApplicationService>();
 
 // Db
-var cs = builder.Configuration.GetConnectionString("AuthDb") ?? builder.Configuration["ConnectionStrings__AuthDb"];
-if (string.IsNullOrWhiteSpace(cs))
-    throw new InvalidOperationException("ConnectionStrings:AuthDb is required");
+builder.Services
+    .AddOptions<DbOptions>()
+    .Bind(builder.Configuration.GetSection("Db"))
+    .ValidateOnStart();
 
-builder.Services.AddDbContext<AuthDbContext>(o =>
-    o.UseNpgsql(cs, npgsql =>
-        npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema)));
+builder.Services.AddDbContext<AuthDbContext>((sp, o) =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var db = sp.GetRequiredService<IOptions<DbOptions>>().Value;
+
+    var cs = cfg.GetConnectionString("AuthDb");
+    if (string.IsNullOrWhiteSpace(cs))
+        throw new InvalidOperationException("ConnectionStrings:AuthDb is required");
+
+    o.UseNpgsql(cs, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", db.Schema));
+});
 
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -55,7 +65,7 @@ builder.Services.AddSwaggerGen(o =>
 
 // Health + OTEL
 builder.Services.AddDopDocHealth();
-builder.Services.AddDopDocOpenTelemetry(builder.Configuration, serviceName);
+builder.Services.AddDopDocOpenTelemetry(builder.Configuration);
 
 var app = builder.Build();
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -11,46 +12,44 @@ public static class OpenTelemetrySetup
     public static IServiceCollection AddDopDocOpenTelemetry(
         this IServiceCollection services,
         IConfiguration config,
-        string serviceName)
+        Action<OtelOptions>? configure = null)
     {
-        var otlpEndpoint = config["OTEL_EXPORTER_OTLP_ENDPOINT"];
-        var otlpProtocol = (config["OTEL_EXPORTER_OTLP_PROTOCOL"] ?? "grpc").ToLowerInvariant();
+        var options = new OtelOptions();
+        config.GetSection("Otel").Bind(options);
+        configure?.Invoke(options);
+        
+        var serviceName = string.IsNullOrWhiteSpace(options.ServiceName) ? "unknown_service" : options.ServiceName;
 
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService(serviceName))
             .WithTracing(t =>
             {
-                t.AddAspNetCoreInstrumentation(o =>
-                {
-                    o.RecordException = true;
-                });
+                if (!options.EnableTracing) return;
 
-                t.AddHttpClientInstrumentation(o =>
-                {
-                    o.RecordException = true;
-                });
+                t.AddAspNetCoreInstrumentation(o => o.RecordException = true);
+                t.AddHttpClientInstrumentation(o => o.RecordException = true);
 
-                if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+                if (!string.IsNullOrWhiteSpace(options.ExporterOtlpEndpoint))
                 {
-                    t.AddOtlpExporter(o =>
+                    t.AddOtlpExporter(exp =>
                     {
-                        o.Endpoint = new Uri(otlpEndpoint);
-                        // protocol auto via env OTEL_EXPORTER_OTLP_PROTOCOL if needed,
-                        // but we keep it minimal here.
+                        exp.Endpoint = new Uri(options.ExporterOtlpEndpoint);
                     });
                 }
             })
             .WithMetrics(m =>
             {
+                if (!options.EnableMetrics) return;
+
                 m.AddAspNetCoreInstrumentation();
                 m.AddHttpClientInstrumentation();
                 m.AddRuntimeInstrumentation();
 
-                if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+                if (!string.IsNullOrWhiteSpace(options.ExporterOtlpEndpoint))
                 {
-                    m.AddOtlpExporter(o =>
+                    m.AddOtlpExporter(exp =>
                     {
-                        o.Endpoint = new Uri(otlpEndpoint);
+                        exp.Endpoint = new Uri(options.ExporterOtlpEndpoint);
                     });
                 }
             });

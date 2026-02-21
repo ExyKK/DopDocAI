@@ -280,17 +280,20 @@ services:
     environment:
       ConnectionStrings__AuthDb: ${AUTH_DB_CONNECTION}
       Db__Schema: auth
+      
       Auth__JwtSecret: ${AUTH_JWT_SECRET}
       Auth__RefreshPepper: ${AUTH_REFRESH_PEPPER}
       Auth__JwtIssuer: dopdoc
       Auth__JwtAudience: dopdoc
-      Auth__AccessTokenMinutes: 30
+      Auth__AccessTokenMinutes: 15
       Auth__RefreshTokenDays: 30
       
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
-      OTEL_SERVICE_NAME: auth_service
-      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
-      LOG_LEVEL: Information
+      Otel__ServiceName: auth_service
+      Otel__ExporterOtlpEndpoint: http://otel_collector:4317
+      Otel__EnableTracing: true
+      Otel__EnableMetrics: true
+      
+      Serilog__MinimumLevel__Default: Information
     depends_on:
       postgres:
         condition: service_healthy
