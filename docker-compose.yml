@@ -5,14 +5,14 @@ services:
     image: postgres:16
     container_name: dopdoc_postgres
     environment:
-      POSTGRES_DB: postgres
+      POSTGRES_DB: dopdoc
       POSTGRES_USER: dopdoc
       POSTGRES_PASSWORD: dopdoc
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./db-init:/docker-entrypoint-initdb.d
+#      - ./db-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dopdoc -d dopdoc"]
       interval: 5s
@@ -278,11 +278,22 @@ services:
     ports:
       - "19000:19000"
     environment:
+      ConnectionStrings__AuthDb: ${AUTH_DB_CONNECTION}
+      Db__Schema: auth
+      Auth__JwtSecret: ${AUTH_JWT_SECRET}
+      Auth__RefreshPepper: ${AUTH_REFRESH_PEPPER}
+      Auth__JwtIssuer: dopdoc
+      Auth__JwtAudience: dopdoc
+      Auth__AccessTokenMinutes: 30
+      Auth__RefreshTokenDays: 30
+      
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
       OTEL_SERVICE_NAME: auth_service
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       LOG_LEVEL: Information
     depends_on:
+      postgres:
+        condition: service_healthy
       otel_collector:
         condition: service_started
 
