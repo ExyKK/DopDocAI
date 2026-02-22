@@ -1,4 +1,6 @@
 using DopDoc.AuthService.Api;
+using DopDoc.AuthService.Api.Auth;
+using DopDoc.AuthService.Api.Proxy;
 using DopDoc.AuthService.Application.Auth;
 using DopDoc.AuthService.Infrastructure.Data;
 using DopDoc.AuthService.Infrastructure.Security;
@@ -67,6 +69,10 @@ builder.Services.AddSwaggerGen(o =>
 builder.Services.AddDopDocHealth();
 builder.Services.AddDopDocOpenTelemetry(builder.Configuration);
 
+// Auth + Reverse Proxy
+builder.Services.AddDopDocJwtAuth(builder.Configuration);
+builder.Services.AddDopDocReverseProxy(builder.Configuration);
+
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
@@ -80,7 +86,8 @@ app.UseSwaggerUI(o =>
 // Endpoints
 app.MapGet("/", () => Results.Ok(new { service = serviceName, status = "ok" }));
 app.MapDopDocHealth();
-app.MapAuthEndpoints();
+app.MapAuthEndpoints().AllowAnonymous();
+app.MapDopDocReverseProxy();
 
 app.Logger.LogInformation("Auth service started. Env={Env}", app.Environment.EnvironmentName);
 

@@ -25,9 +25,13 @@ public sealed class TokenService
 
         var claims = new List<Claim>
         {
+            // JWT standard
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
-            new("uid", user.Id.ToString()),
+
+            // .NET standard
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Email, user.Email),
         };
 
         var token = new JwtSecurityToken(
