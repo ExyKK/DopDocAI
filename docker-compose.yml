@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -281,6 +279,23 @@ services:
       ConnectionStrings__AuthDb: ${AUTH_DB_CONNECTION}
       Db__Schema: auth
       
+      Health__Ready__Postgres__Enabled: true
+      Health__Ready__Postgres__ConnectionName: AuthDb
+      Health__Ready__Postgres__TimeoutSeconds: 2
+
+      Health__Ready__Rabbit__Enabled: true
+      Health__Ready__Rabbit__AmqpUrl: amqp://dopdoc:dopdoc@rabbitmq:5672/
+      Health__Ready__Rabbit__TimeoutSeconds: 2
+
+      Health__Ready__Minio__Enabled: false
+      Health__Ready__Minio__Endpoint: http://minio:9000
+      Health__Ready__Minio__TimeoutSeconds: 2
+
+      Health__Ready__Qdrant__Enabled: false
+      Health__Ready__Qdrant__BaseUrl: http://qdrant:6333
+      Health__Ready__Qdrant__ReadyPath: /readyz
+      Health__Ready__Qdrant__TimeoutSeconds: 2
+      
       Auth__JwtSecret: ${AUTH_JWT_SECRET}
       Auth__RefreshPepper: ${AUTH_REFRESH_PEPPER}
       Auth__JwtIssuer: dopdoc
@@ -292,6 +307,9 @@ services:
       Otel__ExporterOtlpEndpoint: http://otel_collector:4317
       Otel__EnableTracing: true
       Otel__EnableMetrics: true
+      
+      Correlation__HeaderName: X-Correlation-Id
+      Correlation__UseTraceIdAsCorrelationId: false
       
       Serilog__MinimumLevel__Default: Information
     depends_on:
