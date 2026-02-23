@@ -87,9 +87,9 @@ public static class AuthServiceSetup
     public static WebApplication UseAuthService(this WebApplication app)
     {
         // Middleware
-        app.UseDopDocExceptionHandling();
         app.UseDopDocCorrelation();
         app.UseSerilogRequestLogging();
+        app.UseDopDocExceptionHandling();
 
         // Swagger
         app.UseSwagger();
@@ -100,11 +100,7 @@ public static class AuthServiceSetup
 
         // Endpoints
         app.MapDopDocHealth();
-
-        // Auth endpoints (anon)
         app.MapAuthEndpoints().AllowAnonymous();
-
-        // Proxy
         app.MapDopDocReverseProxy();
 
         app.Logger.LogInformation("Auth service started. Env={Env}", app.Environment.EnvironmentName);

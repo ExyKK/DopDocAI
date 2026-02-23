@@ -1,6 +1,7 @@
 using DopDoc.AuthService.Domain;
 using DopDoc.AuthService.Infrastructure.Data;
 using DopDoc.AuthService.Infrastructure.Security;
+using DopDoc.Common.Errors;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -21,13 +22,23 @@ public sealed class AuthApplicationService
 
     public async Task<Guid> RegisterAsync(string email, string password, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ValidationException("Email is required", errorCode: "email_required");
+
+        if (string.IsNullOrWhiteSpace(password))
+            throw new ValidationException("Password is required", errorCode: "password_required");
+
         email = email.Trim().ToLowerInvariant();
 
-        if (email.Length < 3) throw new ArgumentException("Invalid email");
-        if (password.Length < 8) throw new ArgumentException("Password too short (min 8)");
+        if (email.Length < 3)
+            throw new ValidationException("Invalid email", errorCode: "email_invalid");
+
+        if (password.Length < 8)
+            throw new ValidationException("Password too short (min 8)", errorCode: "password_too_short",
+                extensions: new Dictionary<string, object?> { ["min_length"] = 8 });
 
         if (await _db.Users.AnyAsync(x => x.Email == email, ct))
-            throw new InvalidOperationException("Email already registered");
+            throw new ConflictException("Email already registered", errorCode: "email_already_registered");
 
         var user = new User
         {
@@ -45,13 +56,17 @@ public sealed class AuthApplicationService
 
     public async Task<AuthResult> LoginAsync(string email, string password, string? userAgent, string? ip, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            throw new ValidationException("Email and password are required", errorCode: "credentials_required");
+
         email = email.Trim().ToLowerInvariant();
 
         var user = await _db.Users.FirstOrDefaultAsync(x => x.Email == email, ct);
-        if (user is null || !user.IsActive) 
-            throw new UnauthorizedAccessException();
+        if (user is null || !user.IsActive)
+            throw new UnauthorizedException();
+
         if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
-            throw new UnauthorizedAccessException();
+            throw new UnauthorizedException();
 
         user.LastLoginAt = DateTime.UtcNow;
 
@@ -75,17 +90,19 @@ public sealed class AuthApplicationService
 
     public async Task<AuthResult> RefreshAsync(string refreshTokenPlain, string? userAgent, string? ip, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(refreshTokenPlain))
+            throw new ValidationException("Missing refresh token", errorCode: "refresh_token_missing");
+
         var hash = _tokens.HashRefreshToken(refreshTokenPlain);
 
         var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == hash, ct);
         if (rt is null || rt.RevokedAt is not null || rt.ExpiresAt <= DateTime.UtcNow)
-            throw new UnauthorizedAccessException();
+            throw new UnauthorizedException();
 
         var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == rt.UserId, ct);
-        if (user is null || !user.IsActive) 
-            throw new UnauthorizedAccessException();
+        if (user is null || !user.IsActive)
+            throw new UnauthorizedException();
 
-        // rotate
         rt.RevokedAt = DateTime.UtcNow;
 
         var access = _tokens.CreateAccessToken(user);
@@ -108,8 +125,12 @@ public sealed class AuthApplicationService
 
     public async Task LogoutAsync(string refreshTokenPlain, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(refreshTokenPlain))
+            return;
+
         var hash = _tokens.HashRefreshToken(refreshTokenPlain);
         var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == hash, ct);
+
         if (rt is not null && rt.RevokedAt is null)
         {
             rt.RevokedAt = DateTime.UtcNow;
