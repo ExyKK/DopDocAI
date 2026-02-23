@@ -4,7 +4,6 @@ server:
   http_listen_port: 3100
 
 limits_config:
-  # Для OTLP ingestion и structured metadata (в Loki 3.x без этого либо не стартует, либо режет OTLP)
   allow_structured_metadata: true
   retention_period: 168h
 

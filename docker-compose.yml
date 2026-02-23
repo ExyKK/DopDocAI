@@ -91,7 +91,7 @@ services:
     container_name: dopdoc_otel_collector
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
-      - ./backend/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
       - "4317:4317" # OTLP gRPC
       - "4318:4318" # OTLP HTTP
@@ -106,7 +106,7 @@ services:
     image: prom/prometheus:latest
     container_name: dopdoc_prometheus
     volumes:
-      - ./backend/observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
     depends_on:
@@ -118,7 +118,7 @@ services:
     container_name: dopdoc_loki
     command: ["-config.file=/etc/loki/config.yaml"]
     volumes:
-      - ./backend/observability/loki.yaml:/etc/loki/config.yaml:ro
+      - ./observability/loki.yaml:/etc/loki/config.yaml:ro
     ports:
       - "3100:3100"
 
@@ -127,7 +127,7 @@ services:
     container_name: dopdoc_tempo
     command: ["-config.file=/etc/tempo/config.yaml"]
     volumes:
-      - ./backend/observability/tempo.yaml:/etc/tempo/config.yaml:ro
+      - ./observability/tempo.yaml:/etc/tempo/config.yaml:ro
     ports:
       - "3200:3200"   # Tempo HTTP
       - "4319:4317"   # (опционально) отдельный OTLP вход в tempo
@@ -143,7 +143,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: dopdoc
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./backend/observability/grafana-provisioning:/etc/grafana/provisioning
+      - ./observability/grafana-provisioning:/etc/grafana/provisioning
     depends_on:
       prometheus:
         condition: service_started
