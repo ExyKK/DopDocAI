@@ -323,6 +323,49 @@ services:
       otel_collector:
         condition: service_started
 
+  edge_gateway:
+    build:
+      context: .
+      dockerfile: src/services/DopDoc.EdgeGateway/Dockerfile
+    container_name: dopdoc_edge_gateway
+    ports:
+      - "18000:18000"
+    environment:
+      Auth__JwtSecret: ${AUTH_JWT_SECRET}
+      Auth__JwtIssuer: dopdoc
+      Auth__JwtAudience: dopdoc
+
+      Health__Ready__Postgres__Enabled: false
+      Health__Ready__Rabbit__Enabled: false
+      Health__Ready__Minio__Enabled: false
+      Health__Ready__Qdrant__Enabled: false
+
+      ReverseProxy__Clusters__auth__Destinations__d1__Address: http://auth_service:19000/
+      ReverseProxy__Clusters__repos__Destinations__d1__Address: http://repos_service:19300/
+      ReverseProxy__Clusters__chats__Destinations__d1__Address: http://chats_service:19400/
+      ReverseProxy__Clusters__ingestion__Destinations__d1__Address: http://ingestion_service:19100/
+
+      Otel__ServiceName: edge_gateway
+      Otel__ExporterOtlpEndpoint: http://otel_collector:4317
+      Otel__EnableTracing: true
+      Otel__EnableMetrics: true
+
+      Correlation__HeaderName: X-Correlation-Id
+      Correlation__UseTraceIdAsCorrelationId: false
+
+      Serilog__MinimumLevel__Default: Information
+    depends_on:
+      auth_service:
+        condition: service_started
+      repos_service:
+        condition: service_started
+      chats_service:
+        condition: service_started
+      ingestion_service:
+        condition: service_started
+      otel_collector:
+        condition: service_started
+
 volumes:
   pg_data:
   qdrant_data:
