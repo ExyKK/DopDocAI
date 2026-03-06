@@ -1,6 +1,9 @@
 <Solution>
   <Folder Name="/common/">
-    <Project Path="common/DopDoc.Common/DopDoc.Common.csproj" />
+    <Project Path="common/DopDoc.Common.Hosting/DopDoc.Common.Hosting.csproj" />
+    <Project Path="common/DopDoc.Common.Observability/DopDoc.Common.Observability.csproj" />
+    <Project Path="common/DopDoc.Common.Persistence/DopDoc.Common.Persistence.csproj" />
+    <Project Path="common/DopDoc.Common.Messaging/DopDoc.Common.Messaging.csproj" />
   </Folder>
   <Folder Name="/services/">
     <Project Path="services/DopDoc.AuthService/DopDoc.AuthService.csproj" />

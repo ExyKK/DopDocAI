@@ -1,20 +1,23 @@
 using System.Text;
 using DopDoc.AuthService.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace DopDoc.AuthService.Api.Auth;
 
 public static class JwtAuthExtensions
 {
-    public static IServiceCollection AddDopDocJwtAuth(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddDopDocJwtAuth(this IServiceCollection services)
     {
-        var auth = new AuthOptions();
-        config.GetSection("Auth").Bind(auth);
-        
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer(o =>
+            .AddJwtBearer();
+
+        services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+            .Configure<IOptions<AuthOptions>>((o, authOptions) =>
             {
+                var auth = authOptions.Value;
+
                 o.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,

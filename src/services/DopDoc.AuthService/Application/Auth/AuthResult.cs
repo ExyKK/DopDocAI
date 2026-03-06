@@ -1,3 +1,9 @@
 namespace DopDoc.AuthService.Application.Auth;
 
-public sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresInSeconds);
+public sealed record AuthResult(
+    string AccessToken,
+    string RefreshToken,
+    int ExpiresInSeconds,
+    Guid UserId,
+    string Email
+);

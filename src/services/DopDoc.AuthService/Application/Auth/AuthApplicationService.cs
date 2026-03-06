@@ -1,9 +1,11 @@
+using System.Data;
 using DopDoc.AuthService.Domain;
 using DopDoc.AuthService.Infrastructure.Data;
 using DopDoc.AuthService.Infrastructure.Security;
 using DopDoc.Common.Errors;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace DopDoc.AuthService.Application.Auth;
 
@@ -85,7 +87,7 @@ public sealed class AuthApplicationService
 
         await _db.SaveChangesAsync(ct);
 
-        return new AuthResult(access, plainRefresh, _options.AccessTokenMinutes * 60);
+        return new AuthResult(access, plainRefresh, _options.AccessTokenMinutes * 60, user.Id, user.Email);
     }
 
     public async Task<AuthResult> RefreshAsync(string refreshTokenPlain, string? userAgent, string? ip, CancellationToken ct)
@@ -95,32 +97,44 @@ public sealed class AuthApplicationService
 
         var hash = _tokens.HashRefreshToken(refreshTokenPlain);
 
-        var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == hash, ct);
-        if (rt is null || rt.RevokedAt is not null || rt.ExpiresAt <= DateTime.UtcNow)
-            throw new UnauthorizedException();
+        await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
-        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == rt.UserId, ct);
-        if (user is null || !user.IsActive)
-            throw new UnauthorizedException();
-
-        rt.RevokedAt = DateTime.UtcNow;
-
-        var access = _tokens.CreateAccessToken(user);
-        var (newPlain, newHash) = _tokens.CreateRefreshToken();
-
-        _db.RefreshTokens.Add(new RefreshToken
+        try
         {
-            UserId = user.Id,
-            TokenHash = newHash,
-            CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddDays(_options.RefreshTokenDays),
-            UserAgent = userAgent,
-            Ip = ip
-        });
+            var sql = $"SELECT * FROM \"{_db.Schema}\".\"refresh_tokens\" WHERE \"TokenHash\" = {{0}} FOR UPDATE";
+            var rt = await _db.RefreshTokens.FromSqlRaw(sql, hash).SingleOrDefaultAsync(ct);
+            if (rt is null || rt.RevokedAt is not null || rt.ExpiresAt <= DateTime.UtcNow)
+                throw new UnauthorizedException();
 
-        await _db.SaveChangesAsync(ct);
+            var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == rt.UserId, ct);
+            if (user is null || !user.IsActive)
+                throw new UnauthorizedException();
 
-        return new AuthResult(access, newPlain, _options.AccessTokenMinutes * 60);
+            rt.RevokedAt = DateTime.UtcNow;
+
+            var access = _tokens.CreateAccessToken(user);
+            var (newPlain, newHash) = _tokens.CreateRefreshToken();
+
+            _db.RefreshTokens.Add(new RefreshToken
+            {
+                UserId = user.Id,
+                TokenHash = newHash,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddDays(_options.RefreshTokenDays),
+                UserAgent = userAgent,
+                Ip = ip
+            });
+
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            return new AuthResult(access, newPlain, _options.AccessTokenMinutes * 60, user.Id, user.Email);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.SerializationFailure)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw new UnauthorizedException();
+        }
     }
 
     public async Task LogoutAsync(string refreshTokenPlain, CancellationToken ct)

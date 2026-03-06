@@ -3,12 +3,18 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0.100 AS build
 WORKDIR /src
 
 COPY src/DopDoc.slnx ./DopDoc.slnx
-COPY src/common/DopDoc.Common/DopDoc.Common.csproj common/DopDoc.Common/
+COPY src/common/DopDoc.Common.Hosting/DopDoc.Common.Hosting.csproj common/DopDoc.Common.Hosting/
+COPY src/common/DopDoc.Common.Observability/DopDoc.Common.Observability.csproj common/DopDoc.Common.Observability/
+COPY src/common/DopDoc.Common.Persistence/DopDoc.Common.Persistence.csproj common/DopDoc.Common.Persistence/
+COPY src/common/DopDoc.Common.Messaging/DopDoc.Common.Messaging.csproj common/DopDoc.Common.Messaging/
 COPY src/services/DopDoc.AuthService/DopDoc.AuthService.csproj services/DopDoc.AuthService/
 
 RUN dotnet restore ./DopDoc.slnx
 
-COPY src/common/DopDoc.Common/ common/DopDoc.Common/
+COPY src/common/DopDoc.Common.Hosting/ common/DopDoc.Common.Hosting/
+COPY src/common/DopDoc.Common.Observability/ common/DopDoc.Common.Observability/
+COPY src/common/DopDoc.Common.Persistence/ common/DopDoc.Common.Persistence/
+COPY src/common/DopDoc.Common.Messaging/ common/DopDoc.Common.Messaging/
 COPY src/services/DopDoc.AuthService/ services/DopDoc.AuthService/
 
 RUN dotnet publish services/DopDoc.AuthService/DopDoc.AuthService.csproj -c Release -o /app/publish

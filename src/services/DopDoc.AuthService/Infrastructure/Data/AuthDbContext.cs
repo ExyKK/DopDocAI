@@ -8,6 +8,7 @@ namespace DopDoc.AuthService.Infrastructure.Data;
 public sealed class AuthDbContext : DbContext
 {
     private readonly string _schema;
+    public string Schema => _schema;
     
     public AuthDbContext(DbContextOptions<AuthDbContext> options, IOptions<DbOptions> dbOptions) 
         : base(options)

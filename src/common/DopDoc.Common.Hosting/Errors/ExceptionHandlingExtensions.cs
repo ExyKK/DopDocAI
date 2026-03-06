@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using DopDoc.Common.Correlation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace DopDoc.Common.Errors;
 
@@ -20,6 +22,8 @@ public static class ExceptionHandlingExtensions
     {
         var env = app.ApplicationServices.GetRequiredService<IHostEnvironment>();
         var logger = app.ApplicationServices.GetRequiredService<ILoggerFactory>().CreateLogger("DopDoc.ExceptionHandling");
+        var correlationOptions = app.ApplicationServices.GetService<IOptions<CorrelationOptions>>();
+        var correlationHeader = correlationOptions?.Value.HeaderName ?? "X-Correlation-Id";
 
         app.Use(async (context, next) =>
         {
@@ -32,8 +36,8 @@ public static class ExceptionHandlingExtensions
                 var traceId = Activity.Current?.TraceId.ToString() ?? context.TraceIdentifier;
 
                 var correlationId =
-                    context.Items.TryGetValue("X-Correlation-Id", out var v) ? v?.ToString() :
-                    context.Request.Headers.TryGetValue("X-Correlation-Id", out var hv) ? hv.ToString() :
+                    context.Items.TryGetValue(correlationHeader, out var v) ? v?.ToString() :
+                    context.Request.Headers.TryGetValue(correlationHeader, out var hv) ? hv.ToString() :
                     null;
 
                 var pd = BuildProblemDetails(ex, env, traceId, correlationId, out var logLevel);

@@ -1,6 +1,5 @@
 using DopDoc.AuthService.Api;
 using DopDoc.AuthService.Api.Auth;
-using DopDoc.AuthService.Api.Proxy;
 using DopDoc.AuthService.Application.Auth;
 using DopDoc.AuthService.Infrastructure.Data;
 using DopDoc.AuthService.Infrastructure.Security;
@@ -38,6 +37,10 @@ public static class AuthServiceSetup
                 "Auth:JwtSecret must be set and at least 32 chars.")
             .Validate(o => !string.IsNullOrWhiteSpace(o.RefreshPepper) && o.RefreshPepper.Length >= 32,
                 "Auth:RefreshPepper must be set and at least 32 chars.")
+            .Validate(o => !string.IsNullOrWhiteSpace(o.RefreshCookieName),
+                "Auth:RefreshCookieName must be set.")
+            .Validate(o => !string.IsNullOrWhiteSpace(o.RefreshCookiePath) && o.RefreshCookiePath.StartsWith("/"),
+                "Auth:RefreshCookiePath must start with '/'.")
             .ValidateOnStart();
 
         services.AddSingleton<TokenService>();
@@ -77,9 +80,8 @@ public static class AuthServiceSetup
         services.AddDopDocOpenTelemetry(config);
         services.AddDopDocCorrelation(config);
 
-        // Auth + Reverse Proxy
-        services.AddDopDocJwtAuth(config);
-        services.AddDopDocReverseProxy(config);
+        // Auth
+        services.AddDopDocJwtAuth();
 
         return services;
     }
@@ -90,6 +92,8 @@ public static class AuthServiceSetup
         app.UseDopDocCorrelation();
         app.UseSerilogRequestLogging();
         app.UseDopDocExceptionHandling();
+        app.UseAuthentication();
+        app.UseAuthorization();
 
         // Swagger
         app.UseSwagger();
@@ -101,7 +105,6 @@ public static class AuthServiceSetup
         // Endpoints
         app.MapDopDocHealth();
         app.MapAuthEndpoints().AllowAnonymous();
-        app.MapDopDocReverseProxy();
 
         app.Logger.LogInformation("Auth service started. Env={Env}", app.Environment.EnvironmentName);
 

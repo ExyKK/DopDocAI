@@ -302,6 +302,11 @@ services:
       Auth__JwtAudience: dopdoc
       Auth__AccessTokenMinutes: 15
       Auth__RefreshTokenDays: 30
+      Auth__RefreshCookieName: dopdoc_refresh_token
+      Auth__RefreshCookiePath: /api/v1/auth
+      Auth__RefreshCookieDomain: null
+      Auth__RefreshCookieSecure: true
+      Auth__RefreshCookieSameSite: Strict
       
       Otel__ServiceName: auth_service
       Otel__ExporterOtlpEndpoint: http://otel_collector:4317

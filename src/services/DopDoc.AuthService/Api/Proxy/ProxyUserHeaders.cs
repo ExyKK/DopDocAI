@@ -1,7 +1,0 @@
-namespace DopDoc.AuthService.Api.Proxy;
-
-public static class ProxyUserHeaders
-{
-    public const string UserId = "X-User-Id";
-    public const string UserEmail = "X-User-Email";
-}

@@ -91,6 +91,8 @@ coverage.html
 # Build folders
 **/bin/
 **/obj/
+**/bin\\*/
+**/obj\\*/
 
 # Rider
 .idea/

@@ -2,5 +2,9 @@
     <PropertyGroup>
         <!-- Workaround for NETSDK1226 in some .NET 10 Linux distributions -->
         <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+        <!-- Keep restore deterministic across constrained/containerized environments -->
+        <RestoreDisableParallel>true</RestoreDisableParallel>
+        <!-- Workaround: parallel graph build intermittently fails during restore with no surfaced errors -->
+        <BuildInParallel>false</BuildInParallel>
     </PropertyGroup>
 </Project>
