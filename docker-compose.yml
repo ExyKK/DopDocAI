@@ -29,25 +29,6 @@ services:
       - QDRANT__SERVICE__STORAGE_TYPE=rocksdb
 
   # ---------------------------
-  # RabbitMQ (event bus)
-  # ---------------------------
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: dopdoc_rabbitmq
-    ports:
-      - "5672:5672"    # AMQP
-      - "15672:15672"  # UI
-    environment:
-      RABBITMQ_DEFAULT_USER: dopdoc
-      RABBITMQ_DEFAULT_PASS: dopdoc
-      RABBITMQ_DEFAULT_VHOST: /
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  # ---------------------------
   # MinIO (S3 storage for artifacts)
   # ---------------------------
   minio:
@@ -166,11 +147,6 @@ services:
       INGEST_QDRANT_API_KEY: ""
       INGEST_PORT: 19100
 
-      # RabbitMQ (будет использоваться, когда переведём ingest на consumer)
-      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
-      DOPDOC_RABBITMQ_EXCHANGE_COMMANDS: dopdoc.commands
-      DOPDOC_RABBITMQ_EXCHANGE_EVENTS: dopdoc.events
-
       # MinIO (артефакты типа go_symbols.json, опционально)
       DOPDOC_S3_ENDPOINT: http://minio:9000
       DOPDOC_S3_ACCESS_KEY: dopdoc
@@ -201,8 +177,6 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
-      rabbitmq:
-        condition: service_healthy
 
   repos_service:
     build:
@@ -214,10 +188,6 @@ services:
       REPOS_DB_SCHEMA: "repos"
       REPOS_PORT: 19300
 
-      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
-      DOPDOC_RABBITMQ_EXCHANGE_COMMANDS: dopdoc.commands
-      DOPDOC_RABBITMQ_EXCHANGE_EVENTS: dopdoc.events
-
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
       OTEL_SERVICE_NAME: repos_service
     ports:
@@ -226,8 +196,6 @@ services:
       - ./backend/repos_service:/app/backend/repos_service
     depends_on:
       postgres:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
 
   chats_service:
@@ -253,7 +221,6 @@ services:
       CHATS_LLM_DEFAULT_SYSTEM_PROMPT: "You are a helpful assistant."
       CHATS_RAG_TOP_K: "8"
 
-      DOPDOC_RABBITMQ_URL: amqp://dopdoc:dopdoc@rabbitmq:5672/
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
       OTEL_SERVICE_NAME: chats_service
     ports:
@@ -265,8 +232,6 @@ services:
         condition: service_healthy
       ingestion_service:
         condition: service_started
-      rabbitmq:
-        condition: service_healthy
 
   auth_service:
     build:
@@ -282,19 +247,8 @@ services:
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: AuthDb
       Health__Ready__Postgres__TimeoutSeconds: 2
-
-      Health__Ready__Rabbit__Enabled: true
-      Health__Ready__Rabbit__AmqpUrl: amqp://dopdoc:dopdoc@rabbitmq:5672/
-      Health__Ready__Rabbit__TimeoutSeconds: 2
-
       Health__Ready__Minio__Enabled: false
-      Health__Ready__Minio__Endpoint: http://minio:9000
-      Health__Ready__Minio__TimeoutSeconds: 2
-
       Health__Ready__Qdrant__Enabled: false
-      Health__Ready__Qdrant__BaseUrl: http://qdrant:6333
-      Health__Ready__Qdrant__ReadyPath: /readyz
-      Health__Ready__Qdrant__TimeoutSeconds: 2
       
       Auth__JwtSecret: ${AUTH_JWT_SECRET}
       Auth__RefreshPepper: ${AUTH_REFRESH_PEPPER}
@@ -336,7 +290,6 @@ services:
       Auth__JwtAudience: dopdoc
 
       Health__Ready__Postgres__Enabled: false
-      Health__Ready__Rabbit__Enabled: false
       Health__Ready__Minio__Enabled: false
       Health__Ready__Qdrant__Enabled: false
 

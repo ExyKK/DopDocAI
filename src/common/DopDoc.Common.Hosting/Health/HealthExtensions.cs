@@ -25,11 +25,6 @@ public static class HealthExtensions
             failureStatus: HealthStatus.Unhealthy,
             tags: ["ready"]
         );
-        hc.AddCheck<RabbitReadyHealthCheck>(
-            "rabbit_ready",
-            failureStatus: HealthStatus.Unhealthy,
-            tags: ["ready"]
-        );
         hc.AddCheck<MinioReadyHealthCheck>(
             "minio_ready",
             failureStatus: HealthStatus.Unhealthy,

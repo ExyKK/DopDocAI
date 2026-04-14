@@ -7,7 +7,6 @@ public sealed class HealthOptions
     public sealed class ReadyOptions
     {
         public PostgresOptions Postgres { get; init; } = new();
-        public RabbitOptions Rabbit { get; init; } = new();
         public MinioOptions Minio { get; init; } = new();
         public QdrantOptions Qdrant { get; init; } = new();
     }
@@ -16,13 +15,6 @@ public sealed class HealthOptions
     {
         public bool Enabled { get; init; } = false;
         public string ConnectionName { get; init; } = "Default";
-        public int TimeoutSeconds { get; init; } = 2;
-    }
-
-    public sealed class RabbitOptions
-    {
-        public bool Enabled { get; init; } = false;
-        public string? AmqpUrl { get; init; }
         public int TimeoutSeconds { get; init; } = 2;
     }
 
