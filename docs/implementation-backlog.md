@@ -43,6 +43,8 @@
 ### ARCH-001 — Зафиксировать service boundaries
 - Priority: `P0`
 - Depends on: none
+- Status: `completed`
+- Artifact: [Service Boundaries](./architecture/service-boundaries.md)
 - Goal: формально закрепить финальный набор сервисов и зоны ответственности.
 - Tasks:
 - описать роли `RepositoryService`, `ChatService`, `ingestion_service`, `documentation_service`;
@@ -56,6 +58,8 @@
 ### ARCH-002 — Зафиксировать API style guide
 - Priority: `P0`
 - Depends on: `ARCH-001`
+- Status: `completed`
+- Artifact: [API Style Guide](./architecture/api-style-guide.md)
 - Goal: не допустить размытия контрактов между новыми сервисами.
 - Tasks:
 - зафиксировать naming conventions для endpoints и DTO;
@@ -852,22 +856,3 @@
 6. `DOCS-008`
 7. `FRONT-002`
 8. `TEST-003`
-
-## Issue Template Recommendation
-
-Для заведения задач в tracker удобно использовать заголовки формата:
-
-- `[P0][DATA] DATA-001 Create repo schema and initial migration`
-- `[P0][REPO] REPO-002 Implement repository registration and list endpoints`
-- `[P0][INGEST] INGEST-004 Build go_symbols artifact pipeline`
-- `[P1][DOCS] DOCS-004 Implement developer handbook generation`
-
-Минимальные поля для каждого issue:
-
-- `Goal`
-- `Scope`
-- `Out of scope`
-- `Dependencies`
-- `Acceptance criteria`
-- `Test plan`
-
