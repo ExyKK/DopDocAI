@@ -142,7 +142,7 @@ services:
       dockerfile: backend/ingestion_service/Dockerfile.dev
     container_name: dopdoc_ingestion_service
     environment:
-      INGEST_REPOS_SERVICE_URL: http://repos_service:19300
+      INGEST_REPOS_SERVICE_URL: http://repository_service:19200
       INGEST_QDRANT_URL: http://qdrant:6333
       INGEST_QDRANT_API_KEY: ""
       INGEST_PORT: 19100
@@ -173,65 +173,65 @@ services:
       - ./backend/ingestion_service:/app/backend/ingestion_service
       - hf_cache:/hf_cache
     depends_on:
-      repos_service:
+      repository_service:
         condition: service_started
       qdrant:
         condition: service_started
 
-  repos_service:
-    build:
-      context: .
-      dockerfile: backend/repos_service/Dockerfile.dev
-    container_name: dopdoc_repos_service
-    environment:
-      REPOS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
-      REPOS_DB_SCHEMA: "repos"
-      REPOS_PORT: 19300
+#  repos_service:
+#    build:
+#      context: .
+#      dockerfile: backend/repos_service/Dockerfile.dev
+#    container_name: dopdoc_repos_service
+#    environment:
+#      REPOS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
+#      REPOS_DB_SCHEMA: "repos"
+#      REPOS_PORT: 19300
+#
+#      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+#      OTEL_SERVICE_NAME: repos_service
+#    ports:
+#      - "19300:19300"
+#    volumes:
+#      - ./backend/repos_service:/app/backend/repos_service
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
 
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
-      OTEL_SERVICE_NAME: repos_service
-    ports:
-      - "19300:19300"
-    volumes:
-      - ./backend/repos_service:/app/backend/repos_service
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  chats_service:
-    build:
-      context: .
-      dockerfile: backend/chats_service/Dockerfile.dev
-    container_name: dopdoc_chats_service
-    environment:
-      CHATS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
-      CHATS_DB_SCHEMA: "chats"
-      CHATS_REPOS_SERVICE_URL: http://repos_service:19300
-      CHATS_INGESTION_SERVICE_URL: http://ingestion_service:19100
-      CHATS_PORT: 19400
-
-      CHATS_LLM_ROUTER_API: https://openrouter.ai/api/v1/chat/completions
-      CHATS_LLM_API_KEY: ""
-      CHATS_LLM_MODEL: "deepseek/deepseek-v3.2"
-      CHATS_LLM_TEMPERATURE: "0.2"
-      CHATS_LLM_MAX_TOKENS: "1536"
-      CHATS_LLM_TOP_P: "0.95"
-      CHATS_LLM_REPETITION_PENALTY: "1.05"
-      CHATS_LLM_HISTORY_LIMIT: "20"
-      CHATS_LLM_DEFAULT_SYSTEM_PROMPT: "You are a helpful assistant."
-      CHATS_RAG_TOP_K: "8"
-
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
-      OTEL_SERVICE_NAME: chats_service
-    ports:
-      - "19400:19400"
-    volumes:
-      - ./backend/chats_service:/app/backend/chats_service
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ingestion_service:
-        condition: service_started
+#  chats_service:
+#    build:
+#      context: .
+#      dockerfile: backend/chats_service/Dockerfile.dev
+#    container_name: dopdoc_chats_service
+#    environment:
+#      CHATS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
+#      CHATS_DB_SCHEMA: "chats"
+#      CHATS_REPOS_SERVICE_URL: http://repos_service:19300
+#      CHATS_INGESTION_SERVICE_URL: http://ingestion_service:19100
+#      CHATS_PORT: 19400
+#
+#      CHATS_LLM_ROUTER_API: https://openrouter.ai/api/v1/chat/completions
+#      CHATS_LLM_API_KEY: ""
+#      CHATS_LLM_MODEL: "deepseek/deepseek-v3.2"
+#      CHATS_LLM_TEMPERATURE: "0.2"
+#      CHATS_LLM_MAX_TOKENS: "1536"
+#      CHATS_LLM_TOP_P: "0.95"
+#      CHATS_LLM_REPETITION_PENALTY: "1.05"
+#      CHATS_LLM_HISTORY_LIMIT: "20"
+#      CHATS_LLM_DEFAULT_SYSTEM_PROMPT: "You are a helpful assistant."
+#      CHATS_RAG_TOP_K: "8"
+#
+#      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+#      OTEL_SERVICE_NAME: chats_service
+#    ports:
+#      - "19400:19400"
+#    volumes:
+#      - ./backend/chats_service:/app/backend/chats_service
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#      ingestion_service:
+#        condition: service_started
 
   auth_service:
     build:
@@ -277,6 +277,68 @@ services:
       otel_collector:
         condition: service_started
 
+  repository_service:
+    build:
+      context: .
+      dockerfile: src/services/DopDoc.RepositoryService/Dockerfile
+    container_name: dopdoc_repository_service
+    ports:
+      - "19200:19200"
+    environment:
+      ConnectionStrings__RepoDb: Host=postgres;Port=5432;Database=dopdoc;Username=dopdoc;Password=dopdoc
+
+      Health__Ready__Postgres__Enabled: true
+      Health__Ready__Postgres__ConnectionName: RepoDb
+      Health__Ready__Postgres__TimeoutSeconds: 2
+      Health__Ready__Minio__Enabled: false
+      Health__Ready__Qdrant__Enabled: false
+
+      Otel__ServiceName: repository_service
+      Otel__ExporterOtlpEndpoint: http://otel_collector:4317
+      Otel__EnableTracing: true
+      Otel__EnableMetrics: true
+
+      Correlation__HeaderName: X-Correlation-Id
+      Correlation__UseTraceIdAsCorrelationId: false
+
+      Serilog__MinimumLevel__Default: Information
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel_collector:
+        condition: service_started
+
+  chat_service:
+    build:
+      context: .
+      dockerfile: src/services/DopDoc.ChatService/Dockerfile
+    container_name: dopdoc_chat_service
+    ports:
+      - "19300:19300"
+    environment:
+      ConnectionStrings__ChatDb: Host=postgres;Port=5432;Database=dopdoc;Username=dopdoc;Password=dopdoc
+
+      Health__Ready__Postgres__Enabled: true
+      Health__Ready__Postgres__ConnectionName: ChatDb
+      Health__Ready__Postgres__TimeoutSeconds: 2
+      Health__Ready__Minio__Enabled: false
+      Health__Ready__Qdrant__Enabled: false
+
+      Otel__ServiceName: chat_service
+      Otel__ExporterOtlpEndpoint: http://otel_collector:4317
+      Otel__EnableTracing: true
+      Otel__EnableMetrics: true
+
+      Correlation__HeaderName: X-Correlation-Id
+      Correlation__UseTraceIdAsCorrelationId: false
+
+      Serilog__MinimumLevel__Default: Information
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel_collector:
+        condition: service_started
+
   edge_gateway:
     build:
       context: .
@@ -294,8 +356,8 @@ services:
       Health__Ready__Qdrant__Enabled: false
 
       ReverseProxy__Clusters__auth__Destinations__d1__Address: http://auth_service:19000/
-      ReverseProxy__Clusters__repos__Destinations__d1__Address: http://repos_service:19300/
-      ReverseProxy__Clusters__chats__Destinations__d1__Address: http://chats_service:19400/
+      ReverseProxy__Clusters__repos__Destinations__d1__Address: http://repository_service:19200/
+      ReverseProxy__Clusters__chats__Destinations__d1__Address: http://chat_service:19300/
       ReverseProxy__Clusters__ingestion__Destinations__d1__Address: http://ingestion_service:19100/
 
       Otel__ServiceName: edge_gateway
@@ -310,9 +372,9 @@ services:
     depends_on:
       auth_service:
         condition: service_started
-      repos_service:
+      repository_service:
         condition: service_started
-      chats_service:
+      chat_service:
         condition: service_started
       ingestion_service:
         condition: service_started

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using DopDoc.Common.Correlation;
+using DopDoc.Common.UserContext;
 using Microsoft.Extensions.Options;
 
 namespace DopDoc.EdgeGateway.Api.Proxy;
@@ -43,9 +44,9 @@ public sealed class UserContextProxyMiddleware : IMiddleware
                     ?? context.User.FindFirstValue("email");
 
         if (!string.IsNullOrWhiteSpace(userId))
-            context.Request.Headers[ProxyUserHeaders.UserId] = userId;
+            context.Request.Headers[UserContextHeaderNames.UserId] = userId;
 
         if (!string.IsNullOrWhiteSpace(email))
-            context.Request.Headers[ProxyUserHeaders.UserEmail] = email;
+            context.Request.Headers[UserContextHeaderNames.UserEmail] = email;
     }
 }

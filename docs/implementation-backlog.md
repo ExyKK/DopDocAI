@@ -128,6 +128,7 @@
 ### PLATFORM-001 — Подготовить solution под новые сервисы
 - Priority: `P0`
 - Depends on: `ARCH-001`
+- Status: `completed`
 - Goal: добавить в `src` новые сервисы и общие зависимости.
 - Tasks:
 - добавить `DopDoc.RepositoryService` и `DopDoc.ChatService` в solution;
@@ -140,6 +141,7 @@
 ### PLATFORM-002 — Вынести общий user context abstraction
 - Priority: `P0`
 - Depends on: `PLATFORM-001`
+- Status: `completed`
 - Goal: унифицировать чтение `X-User-Id` и correlation headers.
 - Tasks:
 - создать reusable helper/abstraction для доступа к user context;

@@ -7,5 +7,7 @@
   <Folder Name="/services/">
     <Project Path="services/DopDoc.AuthService/DopDoc.AuthService.csproj" />
     <Project Path="services/DopDoc.EdgeGateway/DopDoc.EdgeGateway.csproj" />
+    <Project Path="services/DopDoc.RepositoryService/DopDoc.RepositoryService.csproj" />
+    <Project Path="services/DopDoc.ChatService/DopDoc.ChatService.csproj" />
   </Folder>
 </Solution>
