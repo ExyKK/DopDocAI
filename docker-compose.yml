@@ -285,7 +285,8 @@ services:
     ports:
       - "19200:19200"
     environment:
-      ConnectionStrings__RepoDb: Host=postgres;Port=5432;Database=dopdoc;Username=dopdoc;Password=dopdoc
+      ConnectionStrings__RepoDb: ${REPO_DB_CONNECTION}
+      Db__Schema: repo
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: RepoDb
@@ -316,7 +317,8 @@ services:
     ports:
       - "19300:19300"
     environment:
-      ConnectionStrings__ChatDb: Host=postgres;Port=5432;Database=dopdoc;Username=dopdoc;Password=dopdoc
+      ConnectionStrings__ChatDb: ${CHAT_DB_CONNECTION}
+      Db__Schema: chat
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: ChatDb

@@ -75,6 +75,7 @@
 ### DATA-001 — Создать новую схему `repo`
 - Priority: `P0`
 - Depends on: `ARCH-001`
+- Status: `completed`
 - Goal: вынести новую доменную модель репозиториев, snapshot, jobs и документации в отдельную схему.
 - Tasks:
 - создать проект `DopDoc.RepositoryService`;
@@ -88,6 +89,7 @@
 ### DATA-002 — Создать новую схему `chat`
 - Priority: `P0`
 - Depends on: `ARCH-001`
+- Status: `completed`
 - Goal: отделить chat persistence от legacy Python сервиса.
 - Tasks:
 - создать таблицы `chats`, `chat_messages`, `chat_message_sources`;

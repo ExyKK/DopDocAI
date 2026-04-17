@@ -1,11 +1,15 @@
 using DopDoc.Common.Correlation;
+using DopDoc.Common.Configuration;
 using DopDoc.Common.Errors;
 using DopDoc.Common.Health;
 using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api;
+using DopDoc.RepositoryService.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using Microsoft.Extensions.Options;
 using Serilog;
 
 namespace DopDoc.RepositoryService;
@@ -37,6 +41,22 @@ public static class RepositoryServiceSetup
         services.AddDopDocOpenTelemetry(config);
         services.AddDopDocCorrelation(config);
         services.AddDopDocUserContext();
+
+        services.AddOptions<DbOptions>()
+            .Bind(config.GetSection("Db"))
+            .ValidateOnStart();
+
+        services.AddDbContext<RepositoryDbContext>((sp, o) =>
+        {
+            var cfg = sp.GetRequiredService<IConfiguration>();
+            var db = sp.GetRequiredService<IOptions<DbOptions>>().Value;
+
+            var cs = cfg.GetConnectionString("RepoDb");
+            if (string.IsNullOrWhiteSpace(cs))
+                throw new InvalidOperationException("ConnectionStrings:RepoDb is required");
+
+            o.UseNpgsql(cs, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", db.Schema));
+        });
 
         return services;
     }

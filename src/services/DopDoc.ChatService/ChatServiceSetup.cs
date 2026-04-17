@@ -1,11 +1,15 @@
 using DopDoc.ChatService.Api;
 using DopDoc.Common.Correlation;
+using DopDoc.Common.Configuration;
 using DopDoc.Common.Errors;
 using DopDoc.Common.Health;
 using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using DopDoc.Common.UserContext;
+using DopDoc.ChatService.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using Microsoft.Extensions.Options;
 using Serilog;
 
 namespace DopDoc.ChatService;
@@ -37,6 +41,22 @@ public static class ChatServiceSetup
         services.AddDopDocOpenTelemetry(config);
         services.AddDopDocCorrelation(config);
         services.AddDopDocUserContext();
+
+        services.AddOptions<DbOptions>()
+            .Bind(config.GetSection("Db"))
+            .ValidateOnStart();
+
+        services.AddDbContext<ChatDbContext>((sp, o) =>
+        {
+            var cfg = sp.GetRequiredService<IConfiguration>();
+            var db = sp.GetRequiredService<IOptions<DbOptions>>().Value;
+
+            var cs = cfg.GetConnectionString("ChatDb");
+            if (string.IsNullOrWhiteSpace(cs))
+                throw new InvalidOperationException("ConnectionStrings:ChatDb is required");
+
+            o.UseNpgsql(cs, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", db.Schema));
+        });
 
         return services;
     }
