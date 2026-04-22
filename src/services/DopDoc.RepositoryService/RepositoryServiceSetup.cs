@@ -51,6 +51,7 @@ public static class RepositoryServiceSetup
             .ValidateOnStart();
         services.AddScoped<RepositoryApplicationService>();
         services.AddScoped<RepositorySnapshotApplicationService>();
+        services.AddScoped<JobRunApplicationService>();
 
         services.AddOptions<DbOptions>()
             .Bind(config.GetSection("Db"))
@@ -87,6 +88,7 @@ public static class RepositoryServiceSetup
         app.MapGet("/", () => Results.Ok(new { service = "repository_service", status = "ok" })).AllowAnonymous();
         app.MapRepositoryEndpoints();
         app.MapRepositoryInternalEndpoints();
+        app.MapRunEndpoints();
 
         app.Logger.LogInformation("Repository service started. Env={Env}", app.Environment.EnvironmentName);
 

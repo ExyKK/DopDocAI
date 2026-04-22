@@ -1,5 +1,6 @@
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api.Contracts;
+using DopDoc.RepositoryService.Application.Jobs;
 using DopDoc.RepositoryService.Application.Repositories;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,20 +15,18 @@ public static class RepositoryEndpoints
         g.MapPost("/index", async (
             IndexRepositoryRequest request,
             IUserContextAccessor userContext,
-            RepositoryApplicationService repositories,
+            JobRunApplicationService jobs,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
-            var result = await repositories.RegisterForIndexAsync(
+            var result = await jobs.CreateIndexRunAsync(
                 userId,
                 request.RepositoryUrl,
                 request.SelectedBranch,
                 ct);
 
-            var response = RepositoryContractMapper.ToResponse(result.Repository);
-            return result.Created
-                ? Results.Created($"/api/v1/repositories/{response.Id}", response)
-                : Results.Ok(response);
+            var response = RunContractMapper.ToAcceptedResponse(result.Run);
+            return Results.Accepted(response.StatusUrl, response);
         })
         .WithName("IndexRepository");
 
@@ -88,6 +87,25 @@ public static class RepositoryEndpoints
             return TypedResults.Ok(RepositoryContractMapper.ToResponse(snapshot));
         })
         .WithName("GetRepositorySnapshot");
+
+        g.MapPost("/{repository_id:guid}/documentation", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            CreateDocumentationRunRequest request,
+            IUserContextAccessor userContext,
+            JobRunApplicationService jobs,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var result = await jobs.CreateDocumentationRunAsync(
+                userId,
+                repositoryId,
+                RunContractMapper.ToCommand(request),
+                ct);
+
+            var response = RunContractMapper.ToAcceptedResponse(result.Run);
+            return Results.Accepted(response.StatusUrl, response);
+        })
+        .WithName("CreateDocumentationRun");
 
         return g;
     }

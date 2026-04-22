@@ -4,7 +4,7 @@
 
 - `AuthService` и `EdgeGateway` остаются на C#.
 - `RepositoryService` и `ChatService` реализуются на C#.
-- `ingestion_service` остается на Python и превращается в worker + retrieval service.
+- `ingestion_service` остается на Python и переписывается под worker-first indexing и новый internal retrieval contract без legacy compatibility.
 - `documentation_service` реализуется на Python.
 - Тяжелые процессы строятся через `Postgres-backed jobs + отдельные worker-процессы`.
 - Legacy-сервисы в `backend/repos_service` и `backend/chats_service` считаются временными и не развиваются.
@@ -211,6 +211,7 @@
 ### REPO-004 — Реализовать index/documentation run API
 - Priority: `P0`
 - Depends on: `REPO-003`, `JOBS-001`
+- Status: `completed`
 - Goal: RepositoryService становится control plane для heavy jobs.
 - Tasks:
 - реализовать `POST /repositories/index`;
@@ -299,18 +300,20 @@
 
 ## Epic INGEST — Indexing Worker And Project Analysis
 
-### INGEST-001 — Отделить HTTP API от worker режима в `ingestion_service`
+### INGEST-001 — Перевести `ingestion_service` на worker-first режим
 - Priority: `P0`
 - Depends on: `JOBS-002`
 - Goal: текущий `BackgroundTasks` должен исчезнуть.
 - Tasks:
 - убрать зависимость от текущей схемы запуска через FastAPI request lifecycle;
-- добавить отдельный worker entrypoint;
-- сохранить retrieval API как отдельный режим сервиса;
-- настроить compose на отдельные контейнеры `ingestion_api` и `ingestion_worker` либо режимы запуска одного образа.
+- добавить worker entrypoint;
+- не сохранять legacy ingestion/retrieval API ради совместимости;
+- подготовить место под новый internal retrieval contract, который будет реализован в `RAG-*`;
+- настроить compose на worker container или отдельный worker command для текущего образа.
 - Acceptance:
 - индексация больше не выполняется внутри HTTP запроса;
-- worker можно запустить отдельно.
+- worker можно запустить отдельно;
+- новые потоки не зависят от старых `/ingest` и `/rag` контрактов.
 
 ### INGEST-002 — Реализовать clone + snapshot resolution pipeline
 - Priority: `P0`
