@@ -102,6 +102,7 @@
 ### DATA-003 — Зафиксировать индексы и concurrency constraints
 - Priority: `P0`
 - Depends on: `DATA-001`, `DATA-002`
+- Status: `completed`
 - Goal: исключить дубликаты snapshot и конфликтующие активные jobs.
 - Tasks:
 - сделать `unique(repository_id, commit_sha)` для snapshot;
@@ -169,6 +170,7 @@
 ### REPO-001 — Поднять минимальный `RepositoryService`
 - Priority: `P0`
 - Depends on: `DATA-001`, `PLATFORM-001`, `PLATFORM-002`
+- Status: `completed`
 - Goal: сервис должен стартовать, применять миграции и отдавать health/swagger.
 - Tasks:
 - создать setup по аналогии с AuthService;

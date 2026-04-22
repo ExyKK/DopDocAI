@@ -74,6 +74,10 @@ internal static class RepositoryModelConfiguration
             builder.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
             builder.HasIndex(x => new { x.Status, x.LeaseUntil, x.CreatedAt });
             builder.HasIndex(x => new { x.RepositoryId, x.CreatedAt });
+            builder.HasIndex(x => x.RepositoryId)
+                .IsUnique()
+                .HasDatabaseName("UX_index_runs_active_repository")
+                .HasFilter("\"Status\" IN ('queued', 'running')");
             builder.HasOne(x => x.Repository)
                 .WithMany(x => x.IndexRuns)
                 .HasForeignKey(x => x.RepositoryId)
@@ -137,6 +141,10 @@ internal static class RepositoryModelConfiguration
             builder.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
             builder.HasIndex(x => new { x.Status, x.LeaseUntil, x.CreatedAt });
             builder.HasIndex(x => new { x.RepositoryId, x.SnapshotId, x.CreatedAt });
+            builder.HasIndex(x => new { x.RepositoryId, x.SnapshotId, x.TemplateKind })
+                .IsUnique()
+                .HasDatabaseName("UX_documentation_runs_active_repository_snapshot_template")
+                .HasFilter("\"Status\" IN ('queued', 'running')");
             builder.HasOne(x => x.Repository)
                 .WithMany(x => x.DocumentationRuns)
                 .HasForeignKey(x => x.RepositoryId)

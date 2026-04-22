@@ -252,6 +252,11 @@ namespace DopDoc.RepositoryService.Migrations
 
                     b.HasIndex("RepositoryId", "SnapshotId", "CreatedAt");
 
+                    b.HasIndex("RepositoryId", "SnapshotId", "TemplateKind")
+                        .IsUnique()
+                        .HasDatabaseName("UX_documentation_runs_active_repository_snapshot_template")
+                        .HasFilter("\"Status\" IN ('queued', 'running')");
+
                     b.HasIndex("Status", "LeaseUntil", "CreatedAt");
 
                     b.ToTable("documentation_runs", "repo");
@@ -479,6 +484,11 @@ namespace DopDoc.RepositoryService.Migrations
                     b.HasIndex("SnapshotId");
 
                     b.HasIndex("RepositoryId", "CreatedAt");
+
+                    b.HasIndex("RepositoryId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_index_runs_active_repository")
+                        .HasFilter("\"Status\" IN ('queued', 'running')");
 
                     b.HasIndex("Status", "LeaseUntil", "CreatedAt");
 
