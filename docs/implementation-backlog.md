@@ -239,6 +239,8 @@
 ### JOBS-001 — Спроектировать общий job execution contract
 - Priority: `P0`
 - Depends on: `DATA-001`
+- Status: `completed`
+- Artifact: [Job Execution Contract](./architecture/job-execution-contract.md)
 - Goal: один и тот же execution model должен работать для index и docs jobs.
 - Tasks:
 - определить statuses: `queued`, `running`, `succeeded`, `failed`, `canceled`, `stale`;

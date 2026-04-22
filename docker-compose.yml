@@ -287,6 +287,9 @@ services:
     environment:
       ConnectionStrings__RepoDb: ${REPO_DB_CONNECTION}
       Db__Schema: repo
+      Jobs__MaxAttempts: 3
+      Jobs__LeaseSeconds: 120
+      Jobs__HeartbeatSeconds: 15
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: RepoDb

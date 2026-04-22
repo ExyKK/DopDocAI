@@ -6,6 +6,7 @@ using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api;
+using DopDoc.RepositoryService.Application.Jobs;
 using DopDoc.RepositoryService.Application.Repositories;
 using DopDoc.RepositoryService.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -42,6 +43,12 @@ public static class RepositoryServiceSetup
         services.AddDopDocOpenTelemetry(config);
         services.AddDopDocCorrelation(config);
         services.AddDopDocUserContext();
+        services.AddOptions<JobExecutionOptions>()
+            .Bind(config.GetSection("Jobs"))
+            .Validate(x => x.MaxAttempts > 0, "Jobs:MaxAttempts must be greater than 0")
+            .Validate(x => x.LeaseSeconds > 0, "Jobs:LeaseSeconds must be greater than 0")
+            .Validate(x => x.HeartbeatSeconds > 0, "Jobs:HeartbeatSeconds must be greater than 0")
+            .ValidateOnStart();
         services.AddScoped<RepositoryApplicationService>();
         services.AddScoped<RepositorySnapshotApplicationService>();
 
