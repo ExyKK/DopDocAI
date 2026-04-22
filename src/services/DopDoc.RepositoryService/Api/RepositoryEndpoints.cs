@@ -61,6 +61,34 @@ public static class RepositoryEndpoints
         })
         .WithName("GetRepository");
 
+        g.MapGet("/{repository_id:guid}/snapshots", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            RepositorySnapshotApplicationService snapshots,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = RepositoryPagination.Validate(limit, offset);
+            var page = await snapshots.ListAsync(userId, repositoryId, pagination, ct);
+            return TypedResults.Ok(RepositoryContractMapper.ToPagedResponse(page));
+        })
+        .WithName("ListRepositorySnapshots");
+
+        g.MapGet("/{repository_id:guid}/snapshots/{snapshot_id:guid}", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromRoute(Name = "snapshot_id")] Guid snapshotId,
+            IUserContextAccessor userContext,
+            RepositorySnapshotApplicationService snapshots,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var snapshot = await snapshots.GetAsync(userId, repositoryId, snapshotId, ct);
+            return TypedResults.Ok(RepositoryContractMapper.ToResponse(snapshot));
+        })
+        .WithName("GetRepositorySnapshot");
+
         return g;
     }
 }

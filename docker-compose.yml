@@ -254,7 +254,7 @@ services:
       Auth__RefreshPepper: ${AUTH_REFRESH_PEPPER}
       Auth__JwtIssuer: dopdoc
       Auth__JwtAudience: dopdoc
-      Auth__AccessTokenMinutes: 15
+      Auth__AccessTokenMinutes: 120
       Auth__RefreshTokenDays: 30
       Auth__RefreshCookieName: dopdoc_refresh_token
       Auth__RefreshCookiePath: /api/v1/auth

@@ -32,6 +32,42 @@ public sealed record RepositoryResponse(
     [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt
 );
 
+public sealed record UpsertRepositorySnapshotRequest(
+    [property: JsonPropertyName("branch_name")] string BranchName,
+    [property: JsonPropertyName("commit_sha")] string CommitSha,
+    [property: JsonPropertyName("tree_hash")] string TreeHash,
+    [property: JsonPropertyName("commit_subject")] string? CommitSubject,
+    [property: JsonPropertyName("commit_message")] string? CommitMessage,
+    [property: JsonPropertyName("commit_author_name")] string? CommitAuthorName,
+    [property: JsonPropertyName("commit_author_email")] string? CommitAuthorEmail,
+    [property: JsonPropertyName("commit_authored_at")] DateTimeOffset? CommitAuthoredAt,
+    [property: JsonPropertyName("commit_committed_at")] DateTimeOffset? CommitCommittedAt,
+    [property: JsonPropertyName("files_total")] int FilesTotal,
+    [property: JsonPropertyName("go_files_total")] int GoFilesTotal,
+    [property: JsonPropertyName("readme_files_total")] int ReadmeFilesTotal,
+    [property: JsonPropertyName("bytes_total")] long BytesTotal,
+    [property: JsonPropertyName("set_active")] bool SetActive = true
+);
+
+public sealed record RepositorySnapshotResponse(
+    [property: JsonPropertyName("id")] Guid Id,
+    [property: JsonPropertyName("repository_id")] Guid RepositoryId,
+    [property: JsonPropertyName("branch_name")] string BranchName,
+    [property: JsonPropertyName("commit_sha")] string CommitSha,
+    [property: JsonPropertyName("tree_hash")] string TreeHash,
+    [property: JsonPropertyName("commit_subject")] string? CommitSubject,
+    [property: JsonPropertyName("commit_message")] string? CommitMessage,
+    [property: JsonPropertyName("commit_author_name")] string? CommitAuthorName,
+    [property: JsonPropertyName("commit_author_email")] string? CommitAuthorEmail,
+    [property: JsonPropertyName("commit_authored_at")] DateTimeOffset? CommitAuthoredAt,
+    [property: JsonPropertyName("commit_committed_at")] DateTimeOffset? CommitCommittedAt,
+    [property: JsonPropertyName("files_total")] int FilesTotal,
+    [property: JsonPropertyName("go_files_total")] int GoFilesTotal,
+    [property: JsonPropertyName("readme_files_total")] int ReadmeFilesTotal,
+    [property: JsonPropertyName("bytes_total")] long BytesTotal,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt
+);
+
 public sealed record PagedResponse<TItem>(
     [property: JsonPropertyName("items")] IReadOnlyList<TItem> Items,
     [property: JsonPropertyName("limit")] int Limit,

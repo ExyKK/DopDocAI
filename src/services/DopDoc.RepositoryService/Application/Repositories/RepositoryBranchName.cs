@@ -9,6 +9,19 @@ public static class RepositoryBranchName
         if (string.IsNullOrWhiteSpace(selectedBranch))
             return null;
 
+        return NormalizeRequired(selectedBranch);
+    }
+
+    public static string Require(string? selectedBranch, string errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(selectedBranch))
+            throw new ValidationException("Branch name is required", errorCode: errorCode);
+
+        return NormalizeRequired(selectedBranch);
+    }
+
+    private static string NormalizeRequired(string selectedBranch)
+    {
         var branch = selectedBranch.Trim();
         const string headsPrefix = "refs/heads/";
         if (branch.StartsWith(headsPrefix, StringComparison.Ordinal))

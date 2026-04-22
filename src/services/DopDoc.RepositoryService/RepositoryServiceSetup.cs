@@ -43,6 +43,7 @@ public static class RepositoryServiceSetup
         services.AddDopDocCorrelation(config);
         services.AddDopDocUserContext();
         services.AddScoped<RepositoryApplicationService>();
+        services.AddScoped<RepositorySnapshotApplicationService>();
 
         services.AddOptions<DbOptions>()
             .Bind(config.GetSection("Db"))
@@ -78,6 +79,7 @@ public static class RepositoryServiceSetup
         app.MapDopDocHealth();
         app.MapGet("/", () => Results.Ok(new { service = "repository_service", status = "ok" })).AllowAnonymous();
         app.MapRepositoryEndpoints();
+        app.MapRepositoryInternalEndpoints();
 
         app.Logger.LogInformation("Repository service started. Env={Env}", app.Environment.EnvironmentName);
 

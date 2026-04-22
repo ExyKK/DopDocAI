@@ -197,6 +197,7 @@
 ### REPO-003 — Реализовать `snapshot` lifecycle
 - Priority: `P0`
 - Depends on: `REPO-002`
+- Status: `completed`
 - Goal: RepositoryService должен знать, какой snapshot активный и какие уже существуют.
 - Tasks:
 - реализовать сохранение snapshot metadata;
