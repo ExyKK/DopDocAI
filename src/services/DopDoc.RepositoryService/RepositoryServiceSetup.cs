@@ -6,6 +6,7 @@ using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api;
+using DopDoc.RepositoryService.Application.Repositories;
 using DopDoc.RepositoryService.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
@@ -41,6 +42,7 @@ public static class RepositoryServiceSetup
         services.AddDopDocOpenTelemetry(config);
         services.AddDopDocCorrelation(config);
         services.AddDopDocUserContext();
+        services.AddScoped<RepositoryApplicationService>();
 
         services.AddOptions<DbOptions>()
             .Bind(config.GetSection("Db"))

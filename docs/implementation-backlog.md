@@ -183,6 +183,7 @@
 ### REPO-002 — Реализовать CRUD модели `repository`
 - Priority: `P0`
 - Depends on: `REPO-001`
+- Status: `completed`
 - Goal: дать пользователю возможность зарегистрировать и просматривать репозитории.
 - Tasks:
 - реализовать `POST /repositories/index` как входную точку индексации;

@@ -1,6 +1,7 @@
-using DopDoc.Common.Errors;
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api.Contracts;
+using DopDoc.RepositoryService.Application.Repositories;
+using Microsoft.AspNetCore.Mvc;
 
 namespace DopDoc.RepositoryService.Api;
 
@@ -8,41 +9,58 @@ public static class RepositoryEndpoints
 {
     public static RouteGroupBuilder MapRepositoryEndpoints(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/v1/repos").WithTags("repos");
+        var g = app.MapGroup("/api/v1/repositories").WithTags("repositories");
 
-        g.MapGet("", (int limit, int offset, IUserContextAccessor userContext) =>
+        g.MapPost("/index", async (
+            IndexRepositoryRequest request,
+            IUserContextAccessor userContext,
+            RepositoryApplicationService repositories,
+            CancellationToken ct) =>
         {
-            ValidatePagination(limit, offset);
-            _ = userContext.GetRequiredUserId();
+            var userId = userContext.GetRequiredUserId();
+            var result = await repositories.RegisterForIndexAsync(
+                userId,
+                request.RepositoryUrl,
+                request.SelectedBranch,
+                ct);
 
-            var response = new PagedResponse<RepositoryListItemResponse>(
-                Items: [],
-                Limit: limit,
-                Offset: offset,
-                HasMore: false,
-                TotalCount: 0);
+            var response = RepositoryContractMapper.ToResponse(result.Repository);
+            return result.Created
+                ? Results.Created($"/api/v1/repositories/{response.Id}", response)
+                : Results.Ok(response);
+        })
+        .WithName("IndexRepository");
 
-            return TypedResults.Ok(response);
+        g.MapGet("", async (
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            RepositoryApplicationService repositories,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = RepositoryPagination.Validate(limit, offset);
+            var page = await repositories.ListAsync(
+                userId,
+                pagination,
+                ct);
+
+            return TypedResults.Ok(RepositoryContractMapper.ToPagedResponse(page));
         })
         .WithName("ListRepositories");
 
+        g.MapGet("/{repository_id:guid}", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            IUserContextAccessor userContext,
+            RepositoryApplicationService repositories,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var repository = await repositories.GetAsync(userId, repositoryId, ct);
+            return TypedResults.Ok(RepositoryContractMapper.ToResponse(repository));
+        })
+        .WithName("GetRepository");
+
         return g;
-    }
-
-    private static void ValidatePagination(int limit, int offset)
-    {
-        if (limit is < 1 or > 200)
-        {
-            throw new ValidationException(
-                "limit must be between 1 and 200",
-                errorCode: "limit_out_of_range");
-        }
-
-        if (offset < 0)
-        {
-            throw new ValidationException(
-                "offset must be greater than or equal to 0",
-                errorCode: "offset_out_of_range");
-        }
     }
 }
