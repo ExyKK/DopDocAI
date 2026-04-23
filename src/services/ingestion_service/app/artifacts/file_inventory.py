@@ -1,12 +1,12 @@
 import hashlib
 import json
 from collections import Counter
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from git import Repo
 
+from app.artifacts.models import BuiltAnalysisArtifact
 from app.worker.snapshot_resolver import list_head_tree_files
 
 FILE_INVENTORY_ARTIFACT_KIND = "file_inventory"
@@ -26,19 +26,6 @@ _CONFIG_EXTENSIONS = {
     ".xml",
 }
 _CONFIG_FILENAMES = {"dockerfile", "makefile", ".gitignore", ".editorconfig", ".env", ".env.example"}
-
-
-@dataclass(frozen=True)
-class BuiltAnalysisArtifact:
-    artifact_kind: str
-    schema_version: int
-    format: str
-    content_type: str
-    storage_key: str
-    checksum_sha256: str
-    size_bytes: int
-    row_count: int
-    payload: bytes
 
 
 def build_file_inventory_artifact(
@@ -108,6 +95,7 @@ def build_file_inventory_artifact(
         size_bytes=len(payload),
         row_count=len(files),
         payload=payload,
+        summary=document["summary"],
     )
 
 

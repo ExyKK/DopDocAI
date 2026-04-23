@@ -349,6 +349,7 @@
 ### INGEST-004 — Реализовать `go_symbols.json`
 - Priority: `P0`
 - Depends on: `INGEST-003`
+- Status: `completed`
 - Goal: получить структурированный список сущностей Go.
 - Tasks:
 - доработать tree-sitter extractor под функции, методы, struct, interface, type;

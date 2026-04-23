@@ -232,6 +232,53 @@ class IndexRunStore:
                     stats,
                 )
 
+    def update_analysis_stats(
+        self,
+        run_id: str,
+        worker_id: str,
+        *,
+        files_processed: int,
+        symbols_total: int,
+        stats: dict[str, Any],
+    ) -> None:
+        with self._connect() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    sql.SQL(
+                        """
+                        UPDATE {schema}.index_runs
+                        SET
+                            "FilesProcessed" = %s,
+                            "SymbolsTotal" = %s,
+                            "StatsJson" = %s::jsonb,
+                            "UpdatedAt" = now()
+                        WHERE "Id" = %s
+                        AND "Status" = 'running'
+                        AND "WorkerId" = %s
+                        AND "LeaseUntil" > now();
+                        """
+                    ).format(schema=sql.Identifier(self._schema)),
+                    (
+                        files_processed,
+                        symbols_total,
+                        json.dumps(stats, sort_keys=True, separators=(",", ":"), default=str),
+                        run_id,
+                        worker_id,
+                    ),
+                )
+
+                if row.rowcount != 1:
+                    raise LeaseLostError(f"Lease lost for index_run {run_id}.")
+
+                self._insert_event(
+                    conn,
+                    run_id,
+                    "info",
+                    "parsing",
+                    "Updated analysis counters for index run.",
+                    stats,
+                )
+
     def mark_succeeded(self, run_id: str, worker_id: str) -> None:
         with self._connect() as conn:
             with conn.transaction():
@@ -266,7 +313,7 @@ class IndexRunStore:
                     run_id,
                     "info",
                     "completed",
-                    "Index run completed after snapshot resolution stub.",
+                    "Index run completed after analysis artifact publication.",
                     None,
                 )
 

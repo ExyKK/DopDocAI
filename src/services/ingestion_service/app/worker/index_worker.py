@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from app.artifacts.file_inventory import build_file_inventory_artifact
+from app.artifacts.go_symbols import build_go_symbols_artifact
 from app.core.config import settings
 from app.infra.git_client import GitClient, RepoCloneError
 from app.infra.object_storage import ObjectStorageClient, ObjectStorageError
@@ -16,6 +17,7 @@ from app.infra.repository_service_client import (
     RepositoryServiceClient,
     RepositoryServiceClientError,
 )
+from app.infra.treesitter_client import TreeSitterManager
 from app.worker.job_store import ClaimedIndexRun, IndexRunStore, LeaseLostError
 from app.worker.snapshot_resolver import SnapshotResolver
 
@@ -74,12 +76,14 @@ class IndexWorker:
         repository_service: RepositoryServiceClient,
         storage: ObjectStorageClient,
         resolver: SnapshotResolver,
+        treesitter: TreeSitterManager,
         worker_settings: WorkerSettings,
     ):
         self._store = store
         self._repository_service = repository_service
         self._storage = storage
         self._resolver = resolver
+        self._treesitter = treesitter
         self._settings = worker_settings
 
     def run_once(self) -> bool:
@@ -183,7 +187,7 @@ class IndexWorker:
                     progress_total=metadata["files_total"],
                     payload={"snapshot_id": snapshot_id},
                 )
-                artifact = build_file_inventory_artifact(
+                file_inventory_artifact = build_file_inventory_artifact(
                     resolved.repo_path,
                     repository_id=run.repository_id,
                     snapshot_id=snapshot_id,
@@ -194,51 +198,128 @@ class IndexWorker:
                 self._store.update_progress(
                     run.id,
                     self._settings.worker_id,
-                    "publishing_artifacts",
-                    93,
-                    "Publishing file inventory artifact.",
-                    progress_current=1,
-                    progress_total=1,
-                    payload={
-                        "artifact_kind": artifact.artifact_kind,
-                        "storage_key": artifact.storage_key,
-                    },
+                    "parsing",
+                    90,
+                    "Extracting Go symbols from resolved snapshot.",
+                    progress_current=metadata["go_files_total"],
+                    progress_total=metadata["go_files_total"],
+                    payload={"snapshot_id": snapshot_id, "go_files_total": metadata["go_files_total"]},
                 )
-                self._storage.put_bytes(
-                    key=artifact.storage_key,
-                    data=artifact.payload,
-                    content_type=artifact.content_type,
+                go_symbols_artifact = build_go_symbols_artifact(
+                    resolved.repo_path,
+                    repository_id=run.repository_id,
+                    snapshot_id=snapshot_id,
+                    snapshot_metadata=metadata,
+                    treesitter=self._treesitter,
                 )
                 heartbeat.ensure_alive()
 
-                self._repository_service.upsert_analysis_artifact(
-                    run.repository_id,
-                    snapshot_id,
-                    {
-                        "produced_by_index_run_id": run.id,
-                        "artifact_kind": artifact.artifact_kind,
-                        "storage_bucket": self._storage.bucket,
-                        "storage_key": artifact.storage_key,
-                        "content_type": artifact.content_type,
-                        "format": artifact.format,
-                        "checksum_sha256": artifact.checksum_sha256,
-                        "size_bytes": artifact.size_bytes,
-                        "row_count": artifact.row_count,
-                        "schema_version": artifact.schema_version,
-                    },
+                analysis_stats = {
+                    "pipeline": "file_inventory_and_go_symbols",
+                    "snapshot_id": snapshot_id,
+                    "branch_name": metadata["branch_name"],
+                    "commit_sha": metadata["commit_sha"],
+                    "tree_hash": metadata["tree_hash"],
+                    "files_total": metadata["files_total"],
+                    "go_files_total": metadata["go_files_total"],
+                    "readme_files_total": metadata["readme_files_total"],
+                    "bytes_total": metadata["bytes_total"],
+                    "symbols_total": go_symbols_artifact.summary["symbols_total"] if go_symbols_artifact.summary else 0,
+                    "packages_total": go_symbols_artifact.summary["packages_total"] if go_symbols_artifact.summary else 0,
+                    "artifacts": [
+                        {
+                            "artifact_kind": file_inventory_artifact.artifact_kind,
+                            "schema_version": file_inventory_artifact.schema_version,
+                            "row_count": file_inventory_artifact.row_count,
+                        },
+                        {
+                            "artifact_kind": go_symbols_artifact.artifact_kind,
+                            "schema_version": go_symbols_artifact.schema_version,
+                            "row_count": go_symbols_artifact.row_count,
+                        },
+                    ],
+                }
+                self._store.update_analysis_stats(
+                    run.id,
+                    self._settings.worker_id,
+                    files_processed=metadata["files_total"],
+                    symbols_total=go_symbols_artifact.row_count,
+                    stats=analysis_stats,
                 )
                 heartbeat.ensure_alive()
+
+                artifacts = [file_inventory_artifact, go_symbols_artifact]
+
+                self._store.update_progress(
+                    run.id,
+                    self._settings.worker_id,
+                    "publishing_artifacts",
+                    93,
+                    "Publishing analysis artifacts.",
+                    progress_current=0,
+                    progress_total=len(artifacts),
+                    payload={
+                        "snapshot_id": snapshot_id,
+                        "artifacts": [
+                            {
+                                "artifact_kind": artifact.artifact_kind,
+                                "storage_key": artifact.storage_key,
+                            }
+                            for artifact in artifacts
+                        ],
+                    },
+                )
+                for index, artifact in enumerate(artifacts, start=1):
+                    self._storage.put_bytes(
+                        key=artifact.storage_key,
+                        data=artifact.payload,
+                        content_type=artifact.content_type,
+                    )
+                    heartbeat.ensure_alive()
+
+                    self._repository_service.upsert_analysis_artifact(
+                        run.repository_id,
+                        snapshot_id,
+                        {
+                            "produced_by_index_run_id": run.id,
+                            "artifact_kind": artifact.artifact_kind,
+                            "storage_bucket": self._storage.bucket,
+                            "storage_key": artifact.storage_key,
+                            "content_type": artifact.content_type,
+                            "format": artifact.format,
+                            "checksum_sha256": artifact.checksum_sha256,
+                            "size_bytes": artifact.size_bytes,
+                            "row_count": artifact.row_count,
+                            "schema_version": artifact.schema_version,
+                        },
+                    )
+                    heartbeat.ensure_alive()
+
+                    self._store.update_progress(
+                        run.id,
+                        self._settings.worker_id,
+                        "publishing_artifacts",
+                        93 + index,
+                        f"Published {artifact.artifact_kind} artifact.",
+                        progress_current=index,
+                        progress_total=len(artifacts),
+                        payload={
+                            "artifact_kind": artifact.artifact_kind,
+                            "storage_key": artifact.storage_key,
+                        },
+                    )
+                    heartbeat.ensure_alive()
 
                 self._store.update_progress(
                     run.id,
                     self._settings.worker_id,
                     "finalizing",
-                    97,
-                    "Finalizing file inventory index run.",
+                    98,
+                    "Finalizing analysis artifact index run.",
                     payload={
                         "snapshot_id": snapshot_id,
-                        "artifact_kind": artifact.artifact_kind,
-                        "storage_key": artifact.storage_key,
+                        "artifacts_total": len(artifacts),
+                        "symbols_total": go_symbols_artifact.row_count,
                     },
                 )
                 heartbeat.ensure_alive()
@@ -298,6 +379,7 @@ def main() -> None:
             region=settings.s3_region,
         ),
         resolver=SnapshotResolver(GitClient(), settings.clone_root),
+        treesitter=TreeSitterManager(),
         worker_settings=worker_settings,
     )
 
