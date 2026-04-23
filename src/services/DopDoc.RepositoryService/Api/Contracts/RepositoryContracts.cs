@@ -68,6 +68,35 @@ public sealed record RepositorySnapshotResponse(
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt
 );
 
+public sealed record UpsertAnalysisArtifactRequest(
+    [property: JsonPropertyName("produced_by_index_run_id")] Guid ProducedByIndexRunId,
+    [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
+    [property: JsonPropertyName("storage_bucket")] string StorageBucket,
+    [property: JsonPropertyName("storage_key")] string StorageKey,
+    [property: JsonPropertyName("content_type")] string ContentType,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("checksum_sha256")] string ChecksumSha256,
+    [property: JsonPropertyName("size_bytes")] long SizeBytes,
+    [property: JsonPropertyName("row_count")] int? RowCount,
+    [property: JsonPropertyName("schema_version")] int SchemaVersion
+);
+
+public sealed record AnalysisArtifactResponse(
+    [property: JsonPropertyName("id")] Guid Id,
+    [property: JsonPropertyName("snapshot_id")] Guid SnapshotId,
+    [property: JsonPropertyName("produced_by_index_run_id")] Guid ProducedByIndexRunId,
+    [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
+    [property: JsonPropertyName("storage_bucket")] string StorageBucket,
+    [property: JsonPropertyName("storage_key")] string StorageKey,
+    [property: JsonPropertyName("content_type")] string ContentType,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("checksum_sha256")] string ChecksumSha256,
+    [property: JsonPropertyName("size_bytes")] long SizeBytes,
+    [property: JsonPropertyName("row_count")] int? RowCount,
+    [property: JsonPropertyName("schema_version")] int SchemaVersion,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt
+);
+
 public sealed record PagedResponse<TItem>(
     [property: JsonPropertyName("items")] IReadOnlyList<TItem> Items,
     [property: JsonPropertyName("limit")] int Limit,

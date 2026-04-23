@@ -51,6 +51,7 @@ public static class RepositoryServiceSetup
             .ValidateOnStart();
         services.AddScoped<RepositoryApplicationService>();
         services.AddScoped<RepositorySnapshotApplicationService>();
+        services.AddScoped<AnalysisArtifactApplicationService>();
         services.AddScoped<JobRunApplicationService>();
 
         services.AddOptions<DbOptions>()

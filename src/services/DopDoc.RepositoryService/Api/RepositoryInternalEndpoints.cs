@@ -50,6 +50,26 @@ public static class RepositoryInternalEndpoints
         })
         .WithName("InternalActivateRepositorySnapshot");
 
+        g.MapPost("/{repository_id:guid}/snapshots/{snapshot_id:guid}/analysis-artifacts", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromRoute(Name = "snapshot_id")] Guid snapshotId,
+            UpsertAnalysisArtifactRequest request,
+            AnalysisArtifactApplicationService artifacts,
+            CancellationToken ct) =>
+        {
+            var result = await artifacts.UpsertAsync(
+                repositoryId,
+                snapshotId,
+                RepositoryContractMapper.ToCommand(request),
+                ct);
+
+            var response = RepositoryContractMapper.ToResponse(result.Artifact);
+            return result.Created
+                ? Results.Created($"/internal/v1/repositories/{repositoryId}/snapshots/{snapshotId}/analysis-artifacts/{response.Id}", response)
+                : Results.Ok(response);
+        })
+        .WithName("InternalUpsertAnalysisArtifact");
+
         return g;
     }
 }

@@ -320,7 +320,7 @@
 ### INGEST-002 — Реализовать clone + snapshot resolution pipeline
 - Priority: `P0`
 - Depends on: `INGEST-001`, `REPO-003`
-- Status: `in_progress`
+- Status: `completed`
 - Goal: worker должен получать конкретный commit и собирать воспроизводимый snapshot.
 - Tasks:
 - clone заданного репозитория;
@@ -335,12 +335,13 @@
 ### INGEST-003 — Реализовать `file_inventory.json`
 - Priority: `P0`
 - Depends on: `INGEST-002`
+- Status: `completed`
 - Goal: создать детерминированный инвентарь файлов как базовый артефакт.
 - Tasks:
 - пройти по дереву репозитория;
 - классифицировать файлы: go, markdown, config, test, binary, generated, vendor;
 - вычислить `sha256`, lines count, size;
-- записать артефакт в MinIO и metadata в `analysis_artifacts`.
+- записать артефакт в MinIO и зарегистрировать metadata в `analysis_artifacts` через internal endpoint `RepositoryService`.
 - Acceptance:
 - `file_inventory.json` существует для каждого успешного snapshot;
 - downstream pipeline может использовать его как источник правды по файлам.
@@ -412,7 +413,7 @@
 - Tasks:
 - реализовать naming convention для object keys;
 - публиковать checksum, content type, size;
-- записывать metadata в `analysis_artifacts`;
+- записывать metadata в `analysis_artifacts` через `RepositoryService`;
 - делать overwrite/idempotent publish для одного snapshot.
 - Acceptance:
 - все analysis artifacts доступны по snapshot и version.

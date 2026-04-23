@@ -227,7 +227,7 @@
 
 Допустимое исключение:
 
-- Python worker-ы могут читать и обновлять записи `repo`-схемы, связанные с claim/heartbeat/progress и artifact registration, если это часть согласованного job protocol.
+- Python worker-ы могут читать и обновлять записи `repo`-схемы, связанные с claim/heartbeat/progress и привязкой `snapshot_id` к run, если это часть согласованного job protocol.
 
 ## Main Workflows
 
@@ -237,8 +237,8 @@
 2. `EdgeGateway` аутентифицирует пользователя и проксирует запрос в `RepositoryService`.
 3. `RepositoryService` нормализует URL, создает или находит repository, создает `index_run` в статусе `queued`, возвращает `202 Accepted`.
 4. `ingestion_service` worker claim-ит `index_run` из Postgres.
-5. Worker clone-ит repository, фиксирует `snapshot`, строит analysis artifacts, заливает chunks в Qdrant, публикует artifacts в MinIO.
-6. Worker завершает run статусом `succeeded` или `failed`.
+5. Worker clone-ит repository, фиксирует `snapshot`, строит analysis artifacts, заливает chunks в Qdrant, публикует artifacts в MinIO и регистрирует artifact metadata через internal endpoints `RepositoryService`.
+6. Worker завершает run статусом `succeeded` или `failed` только после успешной публикации и регистрации артефактов текущего slice.
 7. `RepositoryService` отдает status и SSE события по run.
 
 ## Chat

@@ -6,8 +6,9 @@ import httpx
 
 
 class RepositoryServiceClientError(RuntimeError):
-    def __init__(self, message: str, status_code: int | None = None):
+    def __init__(self, message: str, operation: str, status_code: int | None = None):
         super().__init__(message)
+        self.operation = operation
         self.status_code = status_code
 
 
@@ -43,11 +44,53 @@ class RepositoryServiceClient:
             detail = _response_detail(exc.response)
             raise RepositoryServiceClientError(
                 f"RepositoryService snapshot upsert failed: {detail}",
+                operation="snapshot_upsert",
                 status_code=exc.response.status_code,
             ) from exc
         except httpx.HTTPError as exc:
             raise RepositoryServiceClientError(
-                f"RepositoryService snapshot upsert failed: {exc}"
+                f"RepositoryService snapshot upsert failed: {exc}",
+                operation="snapshot_upsert",
+            ) from exc
+
+    def upsert_analysis_artifact(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        artifact: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = {
+            "produced_by_index_run_id": artifact["produced_by_index_run_id"],
+            "artifact_kind": artifact["artifact_kind"],
+            "storage_bucket": artifact["storage_bucket"],
+            "storage_key": artifact["storage_key"],
+            "content_type": artifact["content_type"],
+            "format": artifact["format"],
+            "checksum_sha256": artifact["checksum_sha256"],
+            "size_bytes": artifact["size_bytes"],
+            "row_count": artifact.get("row_count"),
+            "schema_version": artifact["schema_version"],
+        }
+
+        url = (
+            f"{self.base_url.rstrip('/')}/internal/v1/repositories/{repository_id}"
+            f"/snapshots/{snapshot_id}/analysis-artifacts"
+        )
+        try:
+            response = httpx.post(url, json=payload, timeout=self.timeout_s)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_detail(exc.response)
+            raise RepositoryServiceClientError(
+                f"RepositoryService analysis artifact upsert failed: {detail}",
+                operation="analysis_artifact_upsert",
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RepositoryServiceClientError(
+                f"RepositoryService analysis artifact upsert failed: {exc}",
+                operation="analysis_artifact_upsert",
             ) from exc
 
 

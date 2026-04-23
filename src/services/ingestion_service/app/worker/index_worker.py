@@ -8,8 +8,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
+from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.core.config import settings
 from app.infra.git_client import GitClient, RepoCloneError
+from app.infra.object_storage import ObjectStorageClient, ObjectStorageError
 from app.infra.repository_service_client import (
     RepositoryServiceClient,
     RepositoryServiceClientError,
@@ -69,12 +71,14 @@ class IndexWorker:
     def __init__(
         self,
         store: IndexRunStore,
-        snapshots: RepositoryServiceClient,
+        repository_service: RepositoryServiceClient,
+        storage: ObjectStorageClient,
         resolver: SnapshotResolver,
         worker_settings: WorkerSettings,
     ):
         self._store = store
-        self._snapshots = snapshots
+        self._repository_service = repository_service
+        self._storage = storage
         self._resolver = resolver
         self._settings = worker_settings
 
@@ -163,7 +167,7 @@ class IndexWorker:
                         "commit_sha": metadata["commit_sha"],
                     },
                 )
-                snapshot = self._snapshots.upsert_snapshot(run.repository_id, metadata)
+                snapshot = self._repository_service.upsert_snapshot(run.repository_id, metadata)
                 heartbeat.ensure_alive()
 
                 snapshot_id = snapshot["id"]
@@ -172,10 +176,70 @@ class IndexWorker:
                 self._store.update_progress(
                     run.id,
                     self._settings.worker_id,
-                    "finalizing",
-                    90,
-                    "Finalizing snapshot-only index run.",
+                    "scanning_files",
+                    85,
+                    "Building deterministic file inventory.",
+                    progress_current=metadata["files_total"],
+                    progress_total=metadata["files_total"],
                     payload={"snapshot_id": snapshot_id},
+                )
+                artifact = build_file_inventory_artifact(
+                    resolved.repo_path,
+                    repository_id=run.repository_id,
+                    snapshot_id=snapshot_id,
+                    snapshot_metadata=metadata,
+                )
+                heartbeat.ensure_alive()
+
+                self._store.update_progress(
+                    run.id,
+                    self._settings.worker_id,
+                    "publishing_artifacts",
+                    93,
+                    "Publishing file inventory artifact.",
+                    progress_current=1,
+                    progress_total=1,
+                    payload={
+                        "artifact_kind": artifact.artifact_kind,
+                        "storage_key": artifact.storage_key,
+                    },
+                )
+                self._storage.put_bytes(
+                    key=artifact.storage_key,
+                    data=artifact.payload,
+                    content_type=artifact.content_type,
+                )
+                heartbeat.ensure_alive()
+
+                self._repository_service.upsert_analysis_artifact(
+                    run.repository_id,
+                    snapshot_id,
+                    {
+                        "produced_by_index_run_id": run.id,
+                        "artifact_kind": artifact.artifact_kind,
+                        "storage_bucket": self._storage.bucket,
+                        "storage_key": artifact.storage_key,
+                        "content_type": artifact.content_type,
+                        "format": artifact.format,
+                        "checksum_sha256": artifact.checksum_sha256,
+                        "size_bytes": artifact.size_bytes,
+                        "row_count": artifact.row_count,
+                        "schema_version": artifact.schema_version,
+                    },
+                )
+                heartbeat.ensure_alive()
+
+                self._store.update_progress(
+                    run.id,
+                    self._settings.worker_id,
+                    "finalizing",
+                    97,
+                    "Finalizing file inventory index run.",
+                    payload={
+                        "snapshot_id": snapshot_id,
+                        "artifact_kind": artifact.artifact_kind,
+                        "storage_key": artifact.storage_key,
+                    },
                 )
                 heartbeat.ensure_alive()
 
@@ -222,9 +286,16 @@ def main() -> None:
     )
     worker = IndexWorker(
         store=store,
-        snapshots=RepositoryServiceClient(
+        repository_service=RepositoryServiceClient(
             base_url=settings.repos_service_url,
             timeout_s=settings.request_timeout_s,
+        ),
+        storage=ObjectStorageClient(
+            endpoint_url=str(settings.s3_endpoint),
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            bucket=settings.s3_bucket,
+            region=settings.s3_region,
         ),
         resolver=SnapshotResolver(GitClient(), settings.clone_root),
         worker_settings=worker_settings,
@@ -250,7 +321,14 @@ def _map_error_code(exc: Exception) -> str:
     if isinstance(exc, RepoCloneError):
         return "repository_clone_failed"
 
+    if isinstance(exc, ObjectStorageError):
+        return "artifact_publish_failed"
+
     if isinstance(exc, RepositoryServiceClientError):
+        if exc.operation == "analysis_artifact_upsert":
+            if exc.status_code == 409:
+                return "snapshot_conflict"
+            return "artifact_publish_failed"
         if exc.status_code == 404:
             return "repository_not_found"
         if exc.status_code == 409:

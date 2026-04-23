@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import AnyUrl
+from pydantic import AliasChoices, AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,8 +13,29 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://dopdoc:dopdoc@localhost:5432/dopdoc"
     repo_db_schema: str = "repo"
 
-    qdrant_url: AnyUrl = "http://172.17.0.1:6333"
+    qdrant_url: AnyUrl = "http://localhost:6333"
     qdrant_api_key: str | None = None
+
+    s3_endpoint: AnyUrl = Field(
+        default="http://localhost:9000",
+        validation_alias=AliasChoices("INGEST_S3_ENDPOINT", "DOPDOC_S3_ENDPOINT"),
+    )
+    s3_access_key: str = Field(
+        default="dopdoc",
+        validation_alias=AliasChoices("INGEST_S3_ACCESS_KEY", "DOPDOC_S3_ACCESS_KEY"),
+    )
+    s3_secret_key: str = Field(
+        default="dopdocstorage",
+        validation_alias=AliasChoices("INGEST_S3_SECRET_KEY", "DOPDOC_S3_SECRET_KEY"),
+    )
+    s3_bucket: str = Field(
+        default="dopdoc-artifacts",
+        validation_alias=AliasChoices("INGEST_S3_BUCKET", "DOPDOC_S3_BUCKET"),
+    )
+    s3_region: str = Field(
+        default="us-east-1",
+        validation_alias=AliasChoices("INGEST_S3_REGION", "DOPDOC_S3_REGION"),
+    )
 
     jina_model: str = "jinaai/jina-code-embeddings-0.5b"
 

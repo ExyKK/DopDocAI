@@ -1,5 +1,6 @@
 using RepositoryEntity = DopDoc.RepositoryService.Domain.Repository;
 using RepositorySnapshotEntity = DopDoc.RepositoryService.Domain.RepositorySnapshot;
+using AnalysisArtifactEntity = DopDoc.RepositoryService.Domain.AnalysisArtifact;
 
 namespace DopDoc.RepositoryService.Application.Repositories;
 
@@ -24,3 +25,5 @@ public sealed record PagedRepositorySnapshotResult(
 {
     public bool HasMore => Offset + Items.Count < TotalCount;
 }
+
+public sealed record AnalysisArtifactUpsertResult(AnalysisArtifactEntity Artifact, bool Created);

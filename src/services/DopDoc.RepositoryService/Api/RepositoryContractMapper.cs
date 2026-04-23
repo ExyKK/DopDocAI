@@ -1,5 +1,6 @@
 using DopDoc.RepositoryService.Api.Contracts;
 using DopDoc.RepositoryService.Application.Repositories;
+using AnalysisArtifactEntity = DopDoc.RepositoryService.Domain.AnalysisArtifact;
 using RepositoryEntity = DopDoc.RepositoryService.Domain.Repository;
 using RepositorySnapshotEntity = DopDoc.RepositoryService.Domain.RepositorySnapshot;
 
@@ -43,6 +44,24 @@ internal static class RepositoryContractMapper
             ReadmeFilesTotal: snapshot.ReadmeFilesTotal,
             BytesTotal: snapshot.BytesTotal,
             CreatedAt: snapshot.CreatedAt);
+    }
+
+    public static AnalysisArtifactResponse ToResponse(AnalysisArtifactEntity artifact)
+    {
+        return new AnalysisArtifactResponse(
+            Id: artifact.Id,
+            SnapshotId: artifact.SnapshotId,
+            ProducedByIndexRunId: artifact.ProducedByIndexRunId,
+            ArtifactKind: artifact.ArtifactKind,
+            StorageBucket: artifact.StorageBucket,
+            StorageKey: artifact.StorageKey,
+            ContentType: artifact.ContentType,
+            Format: artifact.Format,
+            ChecksumSha256: artifact.ChecksumSha256,
+            SizeBytes: artifact.SizeBytes,
+            RowCount: artifact.RowCount,
+            SchemaVersion: artifact.SchemaVersion,
+            CreatedAt: artifact.CreatedAt);
     }
     
     public static PagedResponse<RepositoryListItemResponse> ToPagedResponse(PagedRepositoryResult page)
@@ -94,5 +113,20 @@ internal static class RepositoryContractMapper
             ReadmeFilesTotal: request.ReadmeFilesTotal,
             BytesTotal: request.BytesTotal,
             SetActive: request.SetActive);
+    }
+
+    public static UpsertAnalysisArtifactCommand ToCommand(UpsertAnalysisArtifactRequest request)
+    {
+        return new UpsertAnalysisArtifactCommand(
+            ProducedByIndexRunId: request.ProducedByIndexRunId,
+            ArtifactKind: request.ArtifactKind,
+            StorageBucket: request.StorageBucket,
+            StorageKey: request.StorageKey,
+            ContentType: request.ContentType,
+            Format: request.Format,
+            ChecksumSha256: request.ChecksumSha256,
+            SizeBytes: request.SizeBytes,
+            RowCount: request.RowCount,
+            SchemaVersion: request.SchemaVersion);
     }
 }

@@ -18,6 +18,13 @@ class SnapshotFileCounters:
 
 
 @dataclass(frozen=True)
+class HeadTreeFile:
+    path: str
+    size: int
+    object_type: str
+
+
+@dataclass(frozen=True)
 class ResolvedSnapshot:
     repo_path: str
     metadata: dict[str, Any]
@@ -86,24 +93,15 @@ def _collect_file_counters(repo: Repo) -> SnapshotFileCounters:
     readme_files_total = 0
     bytes_total = 0
 
-    output = repo.git.ls_tree("-r", "-l", "HEAD")
-    for line in output.splitlines():
-        parsed = _parse_ls_tree_line(line)
-        if parsed is None:
-            continue
-
-        object_type, size, path = parsed
-        if object_type != "blob":
-            continue
-
+    for entry in list_head_tree_files(repo):
         files_total += 1
-        bytes_total += size
+        bytes_total += entry.size
 
-        lower_path = path.lower()
+        lower_path = entry.path.lower()
         if lower_path.endswith(".go"):
             go_files_total += 1
 
-        name = PurePosixPath(path).name.lower()
+        name = PurePosixPath(entry.path).name.lower()
         if name == "readme" or name.startswith("readme."):
             readme_files_total += 1
 
@@ -115,7 +113,20 @@ def _collect_file_counters(repo: Repo) -> SnapshotFileCounters:
     )
 
 
-def _parse_ls_tree_line(line: str) -> tuple[str, int, str] | None:
+def list_head_tree_files(repo: Repo) -> list[HeadTreeFile]:
+    files: list[HeadTreeFile] = []
+    output = repo.git.ls_tree("-r", "-l", "HEAD")
+    for line in output.splitlines():
+        parsed = _parse_ls_tree_line(line)
+        if parsed is None:
+            continue
+
+        files.append(parsed)
+
+    return files
+
+
+def _parse_ls_tree_line(line: str) -> HeadTreeFile | None:
     parts = line.split(maxsplit=4)
     if len(parts) != 5:
         return None
@@ -129,7 +140,10 @@ def _parse_ls_tree_line(line: str) -> tuple[str, int, str] | None:
     except ValueError:
         size = 0
 
-    return object_type, size, path
+    if object_type != "blob":
+        return None
+
+    return HeadTreeFile(path=path, size=size, object_type=object_type)
 
 
 def _utc_datetime(value: datetime | None) -> datetime | None:
