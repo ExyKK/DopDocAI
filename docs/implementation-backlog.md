@@ -255,6 +255,7 @@
 ### JOBS-002 — Реализовать claim loop для `index_runs`
 - Priority: `P0`
 - Depends on: `JOBS-001`, `REPO-004`
+- Status: `completed`
 - Goal: убрать heavy work из HTTP lifecycle.
 - Tasks:
 - реализовать SQL claim через `FOR UPDATE SKIP LOCKED`;
@@ -303,6 +304,7 @@
 ### INGEST-001 — Перевести `ingestion_service` на worker-first режим
 - Priority: `P0`
 - Depends on: `JOBS-002`
+- Status: `completed`
 - Goal: текущий `BackgroundTasks` должен исчезнуть.
 - Tasks:
 - убрать зависимость от текущей схемы запуска через FastAPI request lifecycle;
@@ -318,6 +320,7 @@
 ### INGEST-002 — Реализовать clone + snapshot resolution pipeline
 - Priority: `P0`
 - Depends on: `INGEST-001`, `REPO-003`
+- Status: `in_progress`
 - Goal: worker должен получать конкретный commit и собирать воспроизводимый snapshot.
 - Tasks:
 - clone заданного репозитория;

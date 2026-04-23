@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from app.api.routes.ingest import router as ingest_router
 from app.api.routes.rag import router as rag_router
 from app.core.config import settings
 from app.api.deps import get_embedder, get_treesitter
@@ -60,17 +59,21 @@ def create_app() -> FastAPI:
     async def healthcheck():
         return {"service": settings.service_name, "status": "healthy"}
 
-    app.include_router(ingest_router)
     app.include_router(rag_router)
     return app
 
 
 app = create_app()
 
-if __name__ == "__main__":
+
+def main() -> None:
     uvicorn.run(
-        "main:app",
+        "app.main:app",
         host=settings.host,
         port=settings.port,
-        reload=True,
+        reload=settings.reload,
     )
+
+
+if __name__ == "__main__":
+    main()

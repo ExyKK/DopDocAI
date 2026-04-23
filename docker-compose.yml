@@ -139,10 +139,12 @@ services:
   ingestion_service:
     build:
       context: .
-      dockerfile: backend/ingestion_service/Dockerfile.dev
+      dockerfile: src/services/ingestion_service/Dockerfile.dev
     container_name: dopdoc_ingestion_service
     environment:
       INGEST_REPOS_SERVICE_URL: http://repository_service:19200
+      INGEST_DATABASE_URL: postgresql://dopdoc:dopdoc@postgres:5432/dopdoc
+      INGEST_REPO_DB_SCHEMA: repo
       INGEST_QDRANT_URL: http://qdrant:6333
       INGEST_QDRANT_API_KEY: ""
       INGEST_PORT: 19100
@@ -170,12 +172,38 @@ services:
     ports:
       - "19100:19100"
     volumes:
-      - ./backend/ingestion_service:/app/backend/ingestion_service
+      - ./src/services/ingestion_service:/app/src/services/ingestion_service
       - hf_cache:/hf_cache
     depends_on:
       repository_service:
         condition: service_started
       qdrant:
+        condition: service_started
+
+  ingestion_worker:
+    build:
+      context: .
+      dockerfile: src/services/ingestion_service/Dockerfile.dev
+    container_name: dopdoc_ingestion_worker
+    command: ["ingestion-worker"]
+    environment:
+      INGEST_REPOS_SERVICE_URL: http://repository_service:19200
+      INGEST_DATABASE_URL: postgresql://dopdoc:dopdoc@postgres:5432/dopdoc
+      INGEST_REPO_DB_SCHEMA: repo
+      INGEST_WORKER_POLL_INTERVAL_S: "3"
+      INGEST_WORKER_LEASE_SECONDS: "120"
+      INGEST_WORKER_HEARTBEAT_SECONDS: "15"
+      INGEST_CLONE_ROOT: /tmp/dopdoc-index-worker
+      INGEST_REQUEST_TIMEOUT_S: "10"
+
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: ingestion_worker
+    volumes:
+      - ./src/services/ingestion_service:/app/src/services/ingestion_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      repository_service:
         condition: service_started
 
 #  repos_service:

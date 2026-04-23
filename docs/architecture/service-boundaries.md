@@ -23,7 +23,7 @@
 
 Пояснения:
 
-- `ingestion_service` остается Python-сервисом, но должен быть перенесен из `/backend` в `/src/services/ingestion_service`;
+- `ingestion_service` остается Python-сервисом и живет в `/src/services/ingestion_service`;
 - новый `documentation_service` также должен создаваться внутри `/src/services/documentation_service`;
 - директория `/backend` рассматривается как временная зона для legacy-кода и должна постепенно опустеть по мере миграции;
 - новые сервисы и новые workflow не должны строиться вокруг `/backend` как постоянной корневой директории.
@@ -270,4 +270,3 @@
 - для новых use cases используются только новые сервисы;
 - legacy директории остаются только как временный reference и подлежат удалению после миграции;
 - любые новые документы, compose changes и implementation tasks должны ссылаться на target layout в `/src/services`, а не строиться вокруг `/backend`.
-
