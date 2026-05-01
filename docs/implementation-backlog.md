@@ -376,6 +376,7 @@
 ### INGEST-006 — Реализовать `config_inventory.json`
 - Priority: `P1`
 - Depends on: `INGEST-004`
+- Status: `completed`
 - Goal: собрать конфигурационные точки проекта.
 - Tasks:
 - эвристически извлечь `os.Getenv`, `flag.*`, yaml/json/toml keys, config structs;
@@ -415,7 +416,7 @@
 - Goal: все промежуточные артефакты должны строиться, публиковаться и регистрироваться единообразно.
 - Current state:
 - общий worker-level build/publish path вынесен в `app.worker.artifact_pipeline`;
-- `file_inventory`, `go_symbols` и `package_graph` используют единый publish/register loop.
+- `file_inventory`, `go_symbols`, `package_graph` и `config_inventory` используют единый publish/register loop.
 - Tasks:
 - расширять artifact pipeline новыми builders без разрастания `index_worker`;
 - реализовать naming convention для object keys;

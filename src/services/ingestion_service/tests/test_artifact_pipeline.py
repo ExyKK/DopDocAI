@@ -99,26 +99,30 @@ type Service struct{}
         "file_inventory",
         "go_symbols",
         "package_graph",
+        "config_inventory",
     ]
     assert result.files_processed == 3
     assert result.symbols_total == 3
-    assert result.stats["pipeline"] == "file_inventory_go_symbols_and_package_graph"
+    assert result.stats["pipeline"] == "file_inventory_go_symbols_package_graph_and_config_inventory"
     assert result.stats["packages_total"] == 2
     assert result.stats["package_edges_total"] == 1
+    assert result.stats["config_items_total"] == 0
     assert result.stats["artifacts"] == [
         {"artifact_kind": "file_inventory", "row_count": 3, "schema_version": 1},
         {"artifact_kind": "go_symbols", "row_count": 3, "schema_version": 1},
         {"artifact_kind": "package_graph", "row_count": 2, "schema_version": 1},
+        {"artifact_kind": "config_inventory", "row_count": 0, "schema_version": 1},
     ]
     assert result.finalizing_payload == {
-        "artifacts_total": 3,
+        "artifacts_total": 4,
+        "config_items_total": 0,
         "package_edges_total": 1,
         "packages_total": 2,
         "snapshot_id": "snapshot-id",
         "symbols_total": 3,
     }
-    assert [event["progress_pct"] for event in progress_events] == [85, 90, 92]
-    assert alive_checks == 3
+    assert [event["progress_pct"] for event in progress_events] == [85, 90, 92, 93]
+    assert alive_checks == 4
 
     package_graph = json.loads(result.artifacts[2].payload.decode("utf-8"))
     assert package_graph["entrypoints"][0]["package_id"] == "github.com/acme/project/cmd/api#main"
@@ -186,7 +190,7 @@ def test_publish_analysis_artifacts_uploads_and_registers_in_order() -> None:
         "storage_bucket": "dopdoc-artifacts",
         "storage_key": artifacts[0].storage_key,
     }
-    assert [event["progress_pct"] for event in progress_events] == [93, 94, 95]
+    assert [event["progress_pct"] for event in progress_events] == [94, 95, 96]
     assert alive_checks == 6
 
 

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.artifacts.config_inventory import build_config_inventory_artifact
 from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.artifacts.go_symbols import build_go_symbols_artifact
 from app.artifacts.models import BuiltAnalysisArtifact
@@ -110,10 +111,38 @@ def build_index_analysis_artifacts(
     )
     ensure_alive()
 
-    artifacts = (file_inventory_artifact, go_symbols_artifact, package_graph_artifact)
+    report_progress(
+        "parsing",
+        93,
+        "Building configuration inventory.",
+        progress_current=snapshot_metadata["files_total"],
+        progress_total=snapshot_metadata["files_total"],
+        payload={
+            "snapshot_id": snapshot_id,
+            "file_inventory_artifact": file_inventory_artifact.storage_key,
+            "go_symbols_artifact": go_symbols_artifact.storage_key,
+        },
+    )
+    config_inventory_artifact = build_config_inventory_artifact(
+        repo_path,
+        repository_id=repository_id,
+        snapshot_id=snapshot_id,
+        snapshot_metadata=snapshot_metadata,
+        file_inventory_artifact=file_inventory_artifact,
+        go_symbols_artifact=go_symbols_artifact,
+    )
+    ensure_alive()
+
+    artifacts = (
+        file_inventory_artifact,
+        go_symbols_artifact,
+        package_graph_artifact,
+        config_inventory_artifact,
+    )
     package_graph_summary = package_graph_artifact.summary or {}
+    config_inventory_summary = config_inventory_artifact.summary or {}
     stats = {
-        "pipeline": "file_inventory_go_symbols_and_package_graph",
+        "pipeline": "file_inventory_go_symbols_package_graph_and_config_inventory",
         "snapshot_id": snapshot_id,
         "branch_name": snapshot_metadata["branch_name"],
         "commit_sha": snapshot_metadata["commit_sha"],
@@ -126,6 +155,11 @@ def build_index_analysis_artifacts(
         "packages_total": package_graph_summary.get("packages_total", 0),
         "package_edges_total": package_graph_summary.get("edges_total", 0),
         "entrypoint_packages_total": package_graph_summary.get("entrypoint_packages_total", 0),
+        "config_items_total": config_inventory_summary.get("configuration_items_total", 0),
+        "env_vars_total": config_inventory_summary.get("env_vars_total", 0),
+        "flags_total": config_inventory_summary.get("flags_total", 0),
+        "config_structs_total": config_inventory_summary.get("config_structs_total", 0),
+        "config_files_total": config_inventory_summary.get("config_files_total", 0),
         "artifacts": _artifact_manifest(artifacts),
     }
 
@@ -140,6 +174,7 @@ def build_index_analysis_artifacts(
             "symbols_total": go_symbols_artifact.row_count,
             "packages_total": package_graph_summary.get("packages_total", 0),
             "package_edges_total": package_graph_summary.get("edges_total", 0),
+            "config_items_total": config_inventory_summary.get("configuration_items_total", 0),
         },
     )
 
@@ -157,7 +192,7 @@ def publish_analysis_artifacts(
 ) -> None:
     report_progress(
         "publishing_artifacts",
-        93,
+        94,
         "Publishing analysis artifacts.",
         progress_current=0,
         progress_total=len(artifacts),
@@ -225,4 +260,4 @@ def _artifact_manifest(artifacts: tuple[BuiltAnalysisArtifact, ...]) -> list[dic
 
 
 def _publish_progress_pct(index: int) -> int:
-    return min(97, 93 + index)
+    return min(97, 94 + index)
