@@ -6,7 +6,7 @@ from typing import Any
 
 from git import Repo
 
-from app.artifacts.models import BuiltAnalysisArtifact
+from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
 from app.infra.treesitter_client import TreeSitterManager
 from app.worker.snapshot_resolver import list_head_tree_files
 
@@ -143,9 +143,11 @@ def build_go_symbols_artifact(
         schema_version=GO_SYMBOLS_SCHEMA_VERSION,
         format="json",
         content_type="application/json",
-        storage_key=(
-            f"repositories/{repository_id}/snapshots/{snapshot_id}/analysis/"
-            f"{GO_SYMBOLS_ARTIFACT_KIND}.schema-v{GO_SYMBOLS_SCHEMA_VERSION}.json"
+        storage_key=analysis_artifact_storage_key(
+            repository_id=repository_id,
+            snapshot_id=snapshot_id,
+            artifact_kind=GO_SYMBOLS_ARTIFACT_KIND,
+            schema_version=GO_SYMBOLS_SCHEMA_VERSION,
         ),
         checksum_sha256=checksum_sha256,
         size_bytes=len(payload),

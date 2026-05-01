@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from app.artifacts.models import BuiltAnalysisArtifact
+from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
 
 PACKAGE_GRAPH_ARTIFACT_KIND = "package_graph"
 PACKAGE_GRAPH_SCHEMA_VERSION = 1
@@ -96,9 +96,11 @@ def build_package_graph_artifact(
         schema_version=PACKAGE_GRAPH_SCHEMA_VERSION,
         format="json",
         content_type="application/json",
-        storage_key=(
-            f"repositories/{repository_id}/snapshots/{snapshot_id}/analysis/"
-            f"{PACKAGE_GRAPH_ARTIFACT_KIND}.schema-v{PACKAGE_GRAPH_SCHEMA_VERSION}.json"
+        storage_key=analysis_artifact_storage_key(
+            repository_id=repository_id,
+            snapshot_id=snapshot_id,
+            artifact_kind=PACKAGE_GRAPH_ARTIFACT_KIND,
+            schema_version=PACKAGE_GRAPH_SCHEMA_VERSION,
         ),
         checksum_sha256=checksum_sha256,
         size_bytes=len(payload),

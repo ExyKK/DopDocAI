@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from app.artifacts.models import BuiltAnalysisArtifact
+from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
 
 PROJECT_MODEL_ARTIFACT_KIND = "project_model"
 PROJECT_MODEL_SCHEMA_VERSION = 1
@@ -101,9 +101,11 @@ def build_project_model_artifact(
         schema_version=PROJECT_MODEL_SCHEMA_VERSION,
         format="json",
         content_type="application/json",
-        storage_key=(
-            f"repositories/{repository_id}/snapshots/{snapshot_id}/analysis/"
-            f"{PROJECT_MODEL_ARTIFACT_KIND}.schema-v{PROJECT_MODEL_SCHEMA_VERSION}.json"
+        storage_key=analysis_artifact_storage_key(
+            repository_id=repository_id,
+            snapshot_id=snapshot_id,
+            artifact_kind=PROJECT_MODEL_ARTIFACT_KIND,
+            schema_version=PROJECT_MODEL_SCHEMA_VERSION,
         ),
         checksum_sha256=checksum_sha256,
         size_bytes=len(payload),

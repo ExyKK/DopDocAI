@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from git import Actor, Repo
 
 from app.artifacts.models import BuiltAnalysisArtifact
@@ -101,24 +102,33 @@ type Service struct{}
         "package_graph",
         "config_inventory",
         "project_model",
+        "commit_log",
     ]
     assert result.files_processed == 3
     assert result.symbols_total == 3
-    assert result.stats["pipeline"] == "file_inventory_go_symbols_package_graph_config_inventory_and_project_model"
+    assert (
+        result.stats["pipeline"]
+        == "file_inventory_go_symbols_package_graph_config_inventory_project_model_and_commit_log"
+    )
     assert result.stats["packages_total"] == 2
     assert result.stats["package_edges_total"] == 1
     assert result.stats["config_items_total"] == 0
     assert result.stats["external_integrations_total"] == 0
     assert result.stats["http_surface_detected"] is False
+    assert result.stats["commits_total"] == 1
+    assert result.stats["touched_files_total"] == 3
+    assert result.stats["touched_packages_total"] == 2
     assert result.stats["artifacts"] == [
         {"artifact_kind": "file_inventory", "row_count": 3, "schema_version": 1},
         {"artifact_kind": "go_symbols", "row_count": 3, "schema_version": 1},
         {"artifact_kind": "package_graph", "row_count": 2, "schema_version": 1},
         {"artifact_kind": "config_inventory", "row_count": 0, "schema_version": 1},
         {"artifact_kind": "project_model", "row_count": 3, "schema_version": 1},
+        {"artifact_kind": "commit_log", "row_count": 1, "schema_version": 1},
     ]
     assert result.finalizing_payload == {
-        "artifacts_total": 5,
+        "artifacts_total": 6,
+        "commits_total": 1,
         "config_items_total": 0,
         "external_integrations_total": 0,
         "http_surface_detected": False,
@@ -126,9 +136,11 @@ type Service struct{}
         "packages_total": 2,
         "snapshot_id": "snapshot-id",
         "symbols_total": 3,
+        "touched_files_total": 3,
+        "touched_packages_total": 2,
     }
-    assert [event["progress_pct"] for event in progress_events] == [85, 90, 92, 93, 94]
-    assert alive_checks == 5
+    assert [event["progress_pct"] for event in progress_events] == [85, 90, 92, 93, 94, 95]
+    assert alive_checks == 6
 
     package_graph = json.loads(result.artifacts[2].payload.decode("utf-8"))
     assert package_graph["entrypoints"][0]["package_id"] == "github.com/acme/project/cmd/api#main"
@@ -196,23 +208,92 @@ def test_publish_analysis_artifacts_uploads_and_registers_in_order() -> None:
         "storage_bucket": "dopdoc-artifacts",
         "storage_key": artifacts[0].storage_key,
     }
-    assert [event["progress_pct"] for event in progress_events] == [95, 96, 97]
+    assert [event["progress_pct"] for event in progress_events] == [96, 97, 97]
     assert alive_checks == 6
+
+
+def test_publish_analysis_artifacts_stops_before_register_when_upload_fails() -> None:
+    artifacts = (
+        _artifact("file_inventory", "repositories/repo/snapshots/snapshot/analysis/file_inventory.schema-v1.json"),
+        _artifact("go_symbols", "repositories/repo/snapshots/snapshot/analysis/go_symbols.schema-v1.json"),
+    )
+    storage = FakeStorage(fail_on_key=artifacts[0].storage_key)
+    repository_service = FakeRepositoryService()
+    progress_events: list[dict[str, Any]] = []
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        publish_analysis_artifacts(
+            storage=storage,
+            repository_service=repository_service,
+            repository_id="repo-id",
+            snapshot_id="snapshot-id",
+            index_run_id="run-id",
+            artifacts=artifacts,
+            report_progress=lambda *args, **kwargs: progress_events.append(
+                {"stage": args[0], "progress_pct": args[1]}
+            ),
+            ensure_alive=lambda: None,
+        )
+
+    assert storage.uploads == []
+    assert repository_service.upserts == []
+    assert [event["progress_pct"] for event in progress_events] == [96]
+
+
+def test_publish_analysis_artifacts_stops_after_upload_when_register_fails() -> None:
+    artifacts = (
+        _artifact("file_inventory", "repositories/repo/snapshots/snapshot/analysis/file_inventory.schema-v1.json"),
+        _artifact("go_symbols", "repositories/repo/snapshots/snapshot/analysis/go_symbols.schema-v1.json"),
+    )
+    storage = FakeStorage()
+    repository_service = FakeRepositoryService(fail_on_kind="file_inventory")
+    progress_events: list[dict[str, Any]] = []
+    alive_checks = 0
+
+    def ensure_alive() -> None:
+        nonlocal alive_checks
+        alive_checks += 1
+
+    with pytest.raises(RuntimeError, match="register failed"):
+        publish_analysis_artifacts(
+            storage=storage,
+            repository_service=repository_service,
+            repository_id="repo-id",
+            snapshot_id="snapshot-id",
+            index_run_id="run-id",
+            artifacts=artifacts,
+            report_progress=lambda *args, **kwargs: progress_events.append(
+                {"stage": args[0], "progress_pct": args[1]}
+            ),
+            ensure_alive=ensure_alive,
+        )
+
+    assert [upload["key"] for upload in storage.uploads] == [artifacts[0].storage_key]
+    assert [upsert["artifact"]["artifact_kind"] for upsert in repository_service.upserts] == [
+        "file_inventory"
+    ]
+    assert [event["progress_pct"] for event in progress_events] == [96]
+    assert alive_checks == 1
 
 
 class FakeStorage:
     bucket = "dopdoc-artifacts"
 
-    def __init__(self) -> None:
+    def __init__(self, fail_on_key: str | None = None) -> None:
         self.uploads: list[dict[str, Any]] = []
+        self.fail_on_key = fail_on_key
 
     def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
+        if key == self.fail_on_key:
+            raise RuntimeError("upload failed")
+
         self.uploads.append({"key": key, "data": data, "content_type": content_type})
 
 
 class FakeRepositoryService:
-    def __init__(self) -> None:
+    def __init__(self, fail_on_kind: str | None = None) -> None:
         self.upserts: list[dict[str, Any]] = []
+        self.fail_on_kind = fail_on_kind
 
     def upsert_analysis_artifact(
         self,
@@ -227,6 +308,9 @@ class FakeRepositoryService:
                 "artifact": artifact,
             }
         )
+        if artifact["artifact_kind"] == self.fail_on_kind:
+            raise RuntimeError("register failed")
+
         return {"id": f"{artifact['artifact_kind']}-id"}
 
 

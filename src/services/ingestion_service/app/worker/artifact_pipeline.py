@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.artifacts.commit_log import build_commit_log_artifact
 from app.artifacts.config_inventory import build_config_inventory_artifact
 from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.artifacts.go_symbols import build_go_symbols_artifact
@@ -160,18 +161,40 @@ def build_index_analysis_artifacts(
     )
     ensure_alive()
 
+    report_progress(
+        "parsing",
+        95,
+        "Building commit history artifact.",
+        progress_current=0,
+        progress_total=0,
+        payload={
+            "snapshot_id": snapshot_id,
+            "package_graph_artifact": package_graph_artifact.storage_key,
+        },
+    )
+    commit_log_artifact = build_commit_log_artifact(
+        repo_path,
+        repository_id=repository_id,
+        snapshot_id=snapshot_id,
+        snapshot_metadata=snapshot_metadata,
+        package_graph_artifact=package_graph_artifact,
+    )
+    ensure_alive()
+
     artifacts = (
         file_inventory_artifact,
         go_symbols_artifact,
         package_graph_artifact,
         config_inventory_artifact,
         project_model_artifact,
+        commit_log_artifact,
     )
     package_graph_summary = package_graph_artifact.summary or {}
     config_inventory_summary = config_inventory_artifact.summary or {}
     project_model_summary = project_model_artifact.summary or {}
+    commit_log_summary = commit_log_artifact.summary or {}
     stats = {
-        "pipeline": "file_inventory_go_symbols_package_graph_config_inventory_and_project_model",
+        "pipeline": "file_inventory_go_symbols_package_graph_config_inventory_project_model_and_commit_log",
         "snapshot_id": snapshot_id,
         "branch_name": snapshot_metadata["branch_name"],
         "commit_sha": snapshot_metadata["commit_sha"],
@@ -192,6 +215,11 @@ def build_index_analysis_artifacts(
         "external_integrations_total": project_model_summary.get("external_integrations_total", 0),
         "http_surface_detected": project_model_summary.get("http_surface_detected", False),
         "http_routes_total": project_model_summary.get("http_routes_total", 0),
+        "commits_total": commit_log_summary.get("commits_total", 0),
+        "commits_available": commit_log_summary.get("commits_available", 0),
+        "commit_log_truncated": commit_log_summary.get("truncated", False),
+        "touched_files_total": commit_log_summary.get("touched_files_total", 0),
+        "touched_packages_total": commit_log_summary.get("touched_packages_total", 0),
         "artifacts": _artifact_manifest(artifacts),
     }
 
@@ -209,6 +237,9 @@ def build_index_analysis_artifacts(
             "config_items_total": config_inventory_summary.get("configuration_items_total", 0),
             "external_integrations_total": project_model_summary.get("external_integrations_total", 0),
             "http_surface_detected": project_model_summary.get("http_surface_detected", False),
+            "commits_total": commit_log_summary.get("commits_total", 0),
+            "touched_files_total": commit_log_summary.get("touched_files_total", 0),
+            "touched_packages_total": commit_log_summary.get("touched_packages_total", 0),
         },
     )
 
@@ -226,7 +257,7 @@ def publish_analysis_artifacts(
 ) -> None:
     report_progress(
         "publishing_artifacts",
-        95,
+        96,
         "Publishing analysis artifacts.",
         progress_current=0,
         progress_total=len(artifacts),
@@ -294,4 +325,4 @@ def _artifact_manifest(artifacts: tuple[BuiltAnalysisArtifact, ...]) -> list[dic
 
 
 def _publish_progress_pct(index: int) -> int:
-    return min(97, 95 + index)
+    return min(97, 96 + index)

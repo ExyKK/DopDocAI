@@ -6,7 +6,7 @@ from typing import Any
 
 from git import Repo
 
-from app.artifacts.models import BuiltAnalysisArtifact
+from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
 from app.worker.snapshot_resolver import list_head_tree_files
 
 FILE_INVENTORY_ARTIFACT_KIND = "file_inventory"
@@ -87,9 +87,11 @@ def build_file_inventory_artifact(
         schema_version=FILE_INVENTORY_SCHEMA_VERSION,
         format="json",
         content_type="application/json",
-        storage_key=(
-            f"repositories/{repository_id}/snapshots/{snapshot_id}/analysis/"
-            f"{FILE_INVENTORY_ARTIFACT_KIND}.schema-v{FILE_INVENTORY_SCHEMA_VERSION}.json"
+        storage_key=analysis_artifact_storage_key(
+            repository_id=repository_id,
+            snapshot_id=snapshot_id,
+            artifact_kind=FILE_INVENTORY_ARTIFACT_KIND,
+            schema_version=FILE_INVENTORY_SCHEMA_VERSION,
         ),
         checksum_sha256=checksum_sha256,
         size_bytes=len(payload),

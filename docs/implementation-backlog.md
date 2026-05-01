@@ -401,6 +401,7 @@
 ### INGEST-008 — Реализовать `commit_log.json`
 - Priority: `P1`
 - Depends on: `INGEST-002`
+- Status: `completed`
 - Goal: поддержать diff-aware документацию и историю snapshot.
 - Tasks:
 - собрать N последних commit;
@@ -413,11 +414,14 @@
 ### INGEST-009 — Укрепить artifact publishing в MinIO
 - Priority: `P0`
 - Depends on: `INGEST-003`..`INGEST-008`
-- Status: `in_progress`
+- Status: `completed`
 - Goal: все промежуточные артефакты должны строиться, публиковаться и регистрироваться единообразно.
 - Current state:
 - общий worker-level build/publish path вынесен в `app.worker.artifact_pipeline`;
-- `file_inventory`, `go_symbols`, `package_graph`, `config_inventory` и `project_model` используют единый publish/register loop.
+- `file_inventory`, `go_symbols`, `package_graph`, `config_inventory`, `project_model` и `commit_log` используют единый publish/register loop;
+- object key convention вынесен в общий helper `analysis_artifact_storage_key`;
+- publish loop публикует checksum, content type, size и schema metadata через `RepositoryService`;
+- upload/register failure paths покрыты минимальными automated tests.
 - Tasks:
 - расширять artifact pipeline новыми builders без разрастания `index_worker`;
 - реализовать naming convention для object keys;
