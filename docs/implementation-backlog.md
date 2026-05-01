@@ -408,15 +408,21 @@
 - Acceptance:
 - сервис документации может строить `changes_since_previous_snapshot`.
 
-### INGEST-009 — Реализовать artifact publishing в MinIO
+### INGEST-009 — Укрепить artifact publishing в MinIO
 - Priority: `P0`
 - Depends on: `INGEST-003`..`INGEST-008`
-- Goal: все промежуточные артефакты должны публиковаться единообразно.
+- Status: `in_progress`
+- Goal: все промежуточные артефакты должны строиться, публиковаться и регистрироваться единообразно.
+- Current state:
+- общий worker-level build/publish path вынесен в `app.worker.artifact_pipeline`;
+- `file_inventory`, `go_symbols` и `package_graph` используют единый publish/register loop.
 - Tasks:
+- расширять artifact pipeline новыми builders без разрастания `index_worker`;
 - реализовать naming convention для object keys;
 - публиковать checksum, content type, size;
 - записывать metadata в `analysis_artifacts` через `RepositoryService`;
-- делать overwrite/idempotent publish для одного snapshot.
+- делать overwrite/idempotent publish для одного snapshot;
+- покрыть failure paths upload/register минимальными automated tests.
 - Acceptance:
 - все analysis artifacts доступны по snapshot и version.
 

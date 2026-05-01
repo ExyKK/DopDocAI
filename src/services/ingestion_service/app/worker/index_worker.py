@@ -7,10 +7,8 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from app.artifacts.file_inventory import build_file_inventory_artifact
-from app.artifacts.go_symbols import build_go_symbols_artifact
-from app.artifacts.package_graph import build_package_graph_artifact
 from app.core.config import settings
 from app.infra.git_client import GitClient, RepoCloneError
 from app.infra.object_storage import ObjectStorageClient, ObjectStorageError
@@ -19,6 +17,7 @@ from app.infra.repository_service_client import (
     RepositoryServiceClientError,
 )
 from app.infra.treesitter_client import TreeSitterManager
+from app.worker.artifact_pipeline import build_index_analysis_artifacts, publish_analysis_artifacts
 from app.worker.job_store import ClaimedIndexRun, IndexRunStore, LeaseLostError
 from app.worker.snapshot_resolver import SnapshotResolver
 
@@ -178,165 +177,54 @@ class IndexWorker:
                 snapshot_id = snapshot["id"]
                 self._store.attach_snapshot(run.id, self._settings.worker_id, snapshot_id, metadata)
 
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "scanning_files",
-                    85,
-                    "Building deterministic file inventory.",
-                    progress_current=metadata["files_total"],
-                    progress_total=metadata["files_total"],
-                    payload={"snapshot_id": snapshot_id},
-                )
-                file_inventory_artifact = build_file_inventory_artifact(
-                    resolved.repo_path,
-                    repository_id=run.repository_id,
-                    snapshot_id=snapshot_id,
-                    snapshot_metadata=metadata,
-                )
-                heartbeat.ensure_alive()
+                def report_artifact_progress(
+                    stage: str,
+                    progress_pct: int,
+                    message: str,
+                    *,
+                    progress_current: int = 0,
+                    progress_total: int = 0,
+                    payload: dict[str, Any] | None = None,
+                ) -> None:
+                    self._store.update_progress(
+                        run.id,
+                        self._settings.worker_id,
+                        stage,
+                        progress_pct,
+                        message,
+                        progress_current=progress_current,
+                        progress_total=progress_total,
+                        payload=payload,
+                    )
 
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "parsing",
-                    90,
-                    "Extracting Go symbols from resolved snapshot.",
-                    progress_current=metadata["go_files_total"],
-                    progress_total=metadata["go_files_total"],
-                    payload={"snapshot_id": snapshot_id, "go_files_total": metadata["go_files_total"]},
-                )
-                go_symbols_artifact = build_go_symbols_artifact(
+                artifact_result = build_index_analysis_artifacts(
                     resolved.repo_path,
                     repository_id=run.repository_id,
                     snapshot_id=snapshot_id,
                     snapshot_metadata=metadata,
                     treesitter=self._treesitter,
+                    report_progress=report_artifact_progress,
+                    ensure_alive=heartbeat.ensure_alive,
                 )
-                heartbeat.ensure_alive()
-
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "parsing",
-                    92,
-                    "Building Go package import graph.",
-                    progress_current=metadata["go_files_total"],
-                    progress_total=metadata["go_files_total"],
-                    payload={"snapshot_id": snapshot_id, "go_symbols_artifact": go_symbols_artifact.storage_key},
-                )
-                package_graph_artifact = build_package_graph_artifact(
-                    resolved.repo_path,
-                    repository_id=run.repository_id,
-                    snapshot_id=snapshot_id,
-                    snapshot_metadata=metadata,
-                    go_symbols_artifact=go_symbols_artifact,
-                )
-                heartbeat.ensure_alive()
-
-                package_graph_summary = package_graph_artifact.summary or {}
-                analysis_stats = {
-                    "pipeline": "file_inventory_go_symbols_and_package_graph",
-                    "snapshot_id": snapshot_id,
-                    "branch_name": metadata["branch_name"],
-                    "commit_sha": metadata["commit_sha"],
-                    "tree_hash": metadata["tree_hash"],
-                    "files_total": metadata["files_total"],
-                    "go_files_total": metadata["go_files_total"],
-                    "readme_files_total": metadata["readme_files_total"],
-                    "bytes_total": metadata["bytes_total"],
-                    "symbols_total": go_symbols_artifact.summary["symbols_total"] if go_symbols_artifact.summary else 0,
-                    "packages_total": package_graph_summary.get("packages_total", 0),
-                    "package_edges_total": package_graph_summary.get("edges_total", 0),
-                    "entrypoint_packages_total": package_graph_summary.get("entrypoint_packages_total", 0),
-                    "artifacts": [
-                        {
-                            "artifact_kind": file_inventory_artifact.artifact_kind,
-                            "schema_version": file_inventory_artifact.schema_version,
-                            "row_count": file_inventory_artifact.row_count,
-                        },
-                        {
-                            "artifact_kind": go_symbols_artifact.artifact_kind,
-                            "schema_version": go_symbols_artifact.schema_version,
-                            "row_count": go_symbols_artifact.row_count,
-                        },
-                        {
-                            "artifact_kind": package_graph_artifact.artifact_kind,
-                            "schema_version": package_graph_artifact.schema_version,
-                            "row_count": package_graph_artifact.row_count,
-                        },
-                    ],
-                }
                 self._store.update_analysis_stats(
                     run.id,
                     self._settings.worker_id,
-                    files_processed=metadata["files_total"],
-                    symbols_total=go_symbols_artifact.row_count,
-                    stats=analysis_stats,
+                    files_processed=artifact_result.files_processed,
+                    symbols_total=artifact_result.symbols_total,
+                    stats=artifact_result.stats,
                 )
                 heartbeat.ensure_alive()
 
-                artifacts = [file_inventory_artifact, go_symbols_artifact, package_graph_artifact]
-
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "publishing_artifacts",
-                    93,
-                    "Publishing analysis artifacts.",
-                    progress_current=0,
-                    progress_total=len(artifacts),
-                    payload={
-                        "snapshot_id": snapshot_id,
-                        "artifacts": [
-                            {
-                                "artifact_kind": artifact.artifact_kind,
-                                "storage_key": artifact.storage_key,
-                            }
-                            for artifact in artifacts
-                        ],
-                    },
+                publish_analysis_artifacts(
+                    storage=self._storage,
+                    repository_service=self._repository_service,
+                    repository_id=run.repository_id,
+                    snapshot_id=snapshot_id,
+                    index_run_id=run.id,
+                    artifacts=artifact_result.artifacts,
+                    report_progress=report_artifact_progress,
+                    ensure_alive=heartbeat.ensure_alive,
                 )
-                for index, artifact in enumerate(artifacts, start=1):
-                    self._storage.put_bytes(
-                        key=artifact.storage_key,
-                        data=artifact.payload,
-                        content_type=artifact.content_type,
-                    )
-                    heartbeat.ensure_alive()
-
-                    self._repository_service.upsert_analysis_artifact(
-                        run.repository_id,
-                        snapshot_id,
-                        {
-                            "produced_by_index_run_id": run.id,
-                            "artifact_kind": artifact.artifact_kind,
-                            "storage_bucket": self._storage.bucket,
-                            "storage_key": artifact.storage_key,
-                            "content_type": artifact.content_type,
-                            "format": artifact.format,
-                            "checksum_sha256": artifact.checksum_sha256,
-                            "size_bytes": artifact.size_bytes,
-                            "row_count": artifact.row_count,
-                            "schema_version": artifact.schema_version,
-                        },
-                    )
-                    heartbeat.ensure_alive()
-
-                    self._store.update_progress(
-                        run.id,
-                        self._settings.worker_id,
-                        "publishing_artifacts",
-                        93 + index,
-                        f"Published {artifact.artifact_kind} artifact.",
-                        progress_current=index,
-                        progress_total=len(artifacts),
-                        payload={
-                            "artifact_kind": artifact.artifact_kind,
-                            "storage_key": artifact.storage_key,
-                        },
-                    )
-                    heartbeat.ensure_alive()
 
                 self._store.update_progress(
                     run.id,
@@ -344,13 +232,7 @@ class IndexWorker:
                     "finalizing",
                     98,
                     "Finalizing analysis artifact index run.",
-                    payload={
-                        "snapshot_id": snapshot_id,
-                        "artifacts_total": len(artifacts),
-                        "symbols_total": go_symbols_artifact.row_count,
-                        "packages_total": package_graph_summary.get("packages_total", 0),
-                        "package_edges_total": package_graph_summary.get("edges_total", 0),
-                    },
+                    payload=artifact_result.finalizing_payload,
                 )
                 heartbeat.ensure_alive()
 
