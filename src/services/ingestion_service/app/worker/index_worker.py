@@ -5,11 +5,12 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.artifacts.go_symbols import build_go_symbols_artifact
+from app.artifacts.package_graph import build_package_graph_artifact
 from app.core.config import settings
 from app.infra.git_client import GitClient, RepoCloneError
 from app.infra.object_storage import ObjectStorageClient, ObjectStorageError
@@ -214,8 +215,28 @@ class IndexWorker:
                 )
                 heartbeat.ensure_alive()
 
+                self._store.update_progress(
+                    run.id,
+                    self._settings.worker_id,
+                    "parsing",
+                    92,
+                    "Building Go package import graph.",
+                    progress_current=metadata["go_files_total"],
+                    progress_total=metadata["go_files_total"],
+                    payload={"snapshot_id": snapshot_id, "go_symbols_artifact": go_symbols_artifact.storage_key},
+                )
+                package_graph_artifact = build_package_graph_artifact(
+                    resolved.repo_path,
+                    repository_id=run.repository_id,
+                    snapshot_id=snapshot_id,
+                    snapshot_metadata=metadata,
+                    go_symbols_artifact=go_symbols_artifact,
+                )
+                heartbeat.ensure_alive()
+
+                package_graph_summary = package_graph_artifact.summary or {}
                 analysis_stats = {
-                    "pipeline": "file_inventory_and_go_symbols",
+                    "pipeline": "file_inventory_go_symbols_and_package_graph",
                     "snapshot_id": snapshot_id,
                     "branch_name": metadata["branch_name"],
                     "commit_sha": metadata["commit_sha"],
@@ -225,7 +246,9 @@ class IndexWorker:
                     "readme_files_total": metadata["readme_files_total"],
                     "bytes_total": metadata["bytes_total"],
                     "symbols_total": go_symbols_artifact.summary["symbols_total"] if go_symbols_artifact.summary else 0,
-                    "packages_total": go_symbols_artifact.summary["packages_total"] if go_symbols_artifact.summary else 0,
+                    "packages_total": package_graph_summary.get("packages_total", 0),
+                    "package_edges_total": package_graph_summary.get("edges_total", 0),
+                    "entrypoint_packages_total": package_graph_summary.get("entrypoint_packages_total", 0),
                     "artifacts": [
                         {
                             "artifact_kind": file_inventory_artifact.artifact_kind,
@@ -236,6 +259,11 @@ class IndexWorker:
                             "artifact_kind": go_symbols_artifact.artifact_kind,
                             "schema_version": go_symbols_artifact.schema_version,
                             "row_count": go_symbols_artifact.row_count,
+                        },
+                        {
+                            "artifact_kind": package_graph_artifact.artifact_kind,
+                            "schema_version": package_graph_artifact.schema_version,
+                            "row_count": package_graph_artifact.row_count,
                         },
                     ],
                 }
@@ -248,7 +276,7 @@ class IndexWorker:
                 )
                 heartbeat.ensure_alive()
 
-                artifacts = [file_inventory_artifact, go_symbols_artifact]
+                artifacts = [file_inventory_artifact, go_symbols_artifact, package_graph_artifact]
 
                 self._store.update_progress(
                     run.id,
@@ -320,6 +348,8 @@ class IndexWorker:
                         "snapshot_id": snapshot_id,
                         "artifacts_total": len(artifacts),
                         "symbols_total": go_symbols_artifact.row_count,
+                        "packages_total": package_graph_summary.get("packages_total", 0),
+                        "package_edges_total": package_graph_summary.get("edges_total", 0),
                     },
                 )
                 heartbeat.ensure_alive()

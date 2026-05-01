@@ -149,7 +149,7 @@ def _extract_import_specs(node: Node, source_bytes: bytes) -> list[GoImportSpec]
             name_node = candidate.child_by_field_name("name")
             path_node = candidate.child_by_field_name("path")
             import_path = _unquote_go_string(_node_text(source_bytes, path_node))
-            import_name = _node_text(source_bytes, name_node)
+            import_name = _node_text(source_bytes, name_node) or None
             imports.append(
                 GoImportSpec(
                     path=import_path,

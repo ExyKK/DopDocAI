@@ -363,6 +363,7 @@
 ### INGEST-005 — Реализовать `package_graph.json`
 - Priority: `P1`
 - Depends on: `INGEST-004`
+- Status: `completed`
 - Goal: отразить связи пакетов внутри репозитория.
 - Tasks:
 - агрегировать imports по packages;
@@ -842,19 +843,21 @@
 14. `INGEST-002`
 15. `INGEST-003`
 16. `INGEST-004`
-17. `INGEST-007`
-18. `RAG-001`
-19. `RAG-002`
-20. `RAG-003`
-21. `RAG-004`
-22. `REPO-004`
-23. `CHAT-001`
-24. `CHAT-002`
-25. `CHAT-003`
-26. `GATEWAY-001`
-27. `GATEWAY-002`
-28. `TEST-001`
-29. `TEST-002`
+17. `INGEST-005`
+18. `INGEST-006`
+19. `INGEST-007`
+20. `RAG-001`
+21. `RAG-002`
+22. `RAG-003`
+23. `RAG-004`
+24. `REPO-004`
+25. `CHAT-001`
+26. `CHAT-002`
+27. `CHAT-003`
+28. `GATEWAY-001`
+29. `GATEWAY-002`
+30. `TEST-001`
+31. `TEST-002`
 
 После этого проект уже сможет:
 

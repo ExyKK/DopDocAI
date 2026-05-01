@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from shutil import rmtree
 from typing import Any
@@ -121,6 +121,9 @@ def list_head_tree_files(repo: Repo) -> list[HeadTreeFile]:
         if parsed is None:
             continue
 
+        if parsed.path == ".git" or parsed.path.startswith(".git/"):
+            continue
+
         files.append(parsed)
 
     return files
@@ -150,7 +153,7 @@ def _utc_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
 
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
 def _truncate(value: str | None, max_length: int) -> str | None:
