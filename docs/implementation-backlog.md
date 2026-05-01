@@ -388,6 +388,7 @@
 ### INGEST-007 — Реализовать `project_model.json`
 - Priority: `P0`
 - Depends on: `INGEST-004`, `INGEST-005`, `INGEST-006`
+- Status: `completed`
 - Goal: получить единую нормализованную модель проекта.
 - Tasks:
 - агрегировать files, packages, symbols, entrypoints, config, external integrations;
@@ -416,7 +417,7 @@
 - Goal: все промежуточные артефакты должны строиться, публиковаться и регистрироваться единообразно.
 - Current state:
 - общий worker-level build/publish path вынесен в `app.worker.artifact_pipeline`;
-- `file_inventory`, `go_symbols`, `package_graph` и `config_inventory` используют единый publish/register loop.
+- `file_inventory`, `go_symbols`, `package_graph`, `config_inventory` и `project_model` используют единый publish/register loop.
 - Tasks:
 - расширять artifact pipeline новыми builders без разрастания `index_worker`;
 - реализовать naming convention для object keys;

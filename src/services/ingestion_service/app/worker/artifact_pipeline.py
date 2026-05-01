@@ -8,6 +8,7 @@ from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.artifacts.go_symbols import build_go_symbols_artifact
 from app.artifacts.models import BuiltAnalysisArtifact
 from app.artifacts.package_graph import build_package_graph_artifact
+from app.artifacts.project_model import build_project_model_artifact
 from app.infra.treesitter_client import TreeSitterManager
 
 
@@ -133,16 +134,44 @@ def build_index_analysis_artifacts(
     )
     ensure_alive()
 
+    report_progress(
+        "parsing",
+        94,
+        "Building normalized project model.",
+        progress_current=snapshot_metadata["files_total"],
+        progress_total=snapshot_metadata["files_total"],
+        payload={
+            "snapshot_id": snapshot_id,
+            "file_inventory_artifact": file_inventory_artifact.storage_key,
+            "go_symbols_artifact": go_symbols_artifact.storage_key,
+            "package_graph_artifact": package_graph_artifact.storage_key,
+            "config_inventory_artifact": config_inventory_artifact.storage_key,
+        },
+    )
+    project_model_artifact = build_project_model_artifact(
+        repo_path,
+        repository_id=repository_id,
+        snapshot_id=snapshot_id,
+        snapshot_metadata=snapshot_metadata,
+        file_inventory_artifact=file_inventory_artifact,
+        go_symbols_artifact=go_symbols_artifact,
+        package_graph_artifact=package_graph_artifact,
+        config_inventory_artifact=config_inventory_artifact,
+    )
+    ensure_alive()
+
     artifacts = (
         file_inventory_artifact,
         go_symbols_artifact,
         package_graph_artifact,
         config_inventory_artifact,
+        project_model_artifact,
     )
     package_graph_summary = package_graph_artifact.summary or {}
     config_inventory_summary = config_inventory_artifact.summary or {}
+    project_model_summary = project_model_artifact.summary or {}
     stats = {
-        "pipeline": "file_inventory_go_symbols_package_graph_and_config_inventory",
+        "pipeline": "file_inventory_go_symbols_package_graph_config_inventory_and_project_model",
         "snapshot_id": snapshot_id,
         "branch_name": snapshot_metadata["branch_name"],
         "commit_sha": snapshot_metadata["commit_sha"],
@@ -160,6 +189,9 @@ def build_index_analysis_artifacts(
         "flags_total": config_inventory_summary.get("flags_total", 0),
         "config_structs_total": config_inventory_summary.get("config_structs_total", 0),
         "config_files_total": config_inventory_summary.get("config_files_total", 0),
+        "external_integrations_total": project_model_summary.get("external_integrations_total", 0),
+        "http_surface_detected": project_model_summary.get("http_surface_detected", False),
+        "http_routes_total": project_model_summary.get("http_routes_total", 0),
         "artifacts": _artifact_manifest(artifacts),
     }
 
@@ -175,6 +207,8 @@ def build_index_analysis_artifacts(
             "packages_total": package_graph_summary.get("packages_total", 0),
             "package_edges_total": package_graph_summary.get("edges_total", 0),
             "config_items_total": config_inventory_summary.get("configuration_items_total", 0),
+            "external_integrations_total": project_model_summary.get("external_integrations_total", 0),
+            "http_surface_detected": project_model_summary.get("http_surface_detected", False),
         },
     )
 
@@ -192,7 +226,7 @@ def publish_analysis_artifacts(
 ) -> None:
     report_progress(
         "publishing_artifacts",
-        94,
+        95,
         "Publishing analysis artifacts.",
         progress_current=0,
         progress_total=len(artifacts),
@@ -260,4 +294,4 @@ def _artifact_manifest(artifacts: tuple[BuiltAnalysisArtifact, ...]) -> list[dic
 
 
 def _publish_progress_pct(index: int) -> int:
-    return min(97, 94 + index)
+    return min(97, 95 + index)
