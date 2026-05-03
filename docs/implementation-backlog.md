@@ -432,6 +432,57 @@
 - Acceptance:
 - все analysis artifacts доступны по snapshot и version.
 
+### INGEST-010 — Передавать base snapshot context в `commit_log.json`
+- Priority: `P1`
+- Depends on: `INGEST-008`, `REPO-003`
+- Goal: сделать `commit_log.json` пригодным для реального diff-aware docs flow, а не только для recent-history режима.
+- Tasks:
+- определить предыдущий snapshot для repository/branch перед сборкой артефактов;
+- передавать `base_snapshot_id` и `base_commit_sha` в `snapshot_metadata`;
+- строить `base_commit_sha..HEAD`, если base commit reachable;
+- явно фиксировать fallback reason, если base snapshot отсутствует или commit недостижим.
+- Acceptance:
+- повторная индексация нового commit формирует `commit_log.range.mode = base_to_head`;
+- docs generator может строить `changes_since_previous_snapshot` без ручного поиска base snapshot.
+
+### INGEST-011 — Укрепить compose runtime для artifact publishing
+- Priority: `P1`
+- Depends on: `INGEST-009`
+- Goal: сделать ручной и локальный запуск artifact pipeline предсказуемым.
+- Tasks:
+- добавить `ingestion_worker` dependency от `minio` healthcheck и `minio_init`;
+- убедиться, что bucket существует до первой публикации артефактов;
+- документировать ручной smoke path: index run -> `analysis_artifacts` rows -> MinIO objects;
+- при необходимости добавить retries вокруг transient object-storage startup errors.
+- Acceptance:
+- свежий `docker compose up` не падает на публикации артефактов из-за неготового MinIO/bucket.
+
+### INGEST-012 — Поддержать Go multi-module repos в `package_graph.json`
+- Priority: `P0`
+- Depends on: `INGEST-005`
+- Goal: корректно строить package graph для monorepo и репозиториев с несколькими `go.mod`.
+- Tasks:
+- находить все `go.mod` в tracked tree;
+- назначать каждому Go file ближайший module root;
+- формировать package ids/import paths с учетом module root;
+- резолвить internal edges внутри каждого module и между локальными modules;
+- отражать module metadata в `package_graph.modules[]`, не ломая root-module сценарий.
+- Acceptance:
+- multi-module Go repo получает корректные packages/edges/entrypoints;
+- single-module репозитории сохраняют прежнюю форму данных или совместимый schema-v2 migration path.
+
+### INGEST-013 — Улучшить `http_surface` detection
+- Priority: `P1`
+- Depends on: `INGEST-007`
+- Goal: повысить качество секций документации про API surface без перехода к свободному RAG.
+- Tasks:
+- извлекать routes из многострочных вызовов и route groups;
+- поддержать типичные паттерны `chi`, `gin`, `echo`, `fiber`, `gorilla/mux`, `net/http`;
+- связывать route с package, symbol/function handler, file/line;
+- фиксировать confidence и unsupported patterns в structured form.
+- Acceptance:
+- `project_model.http_surface` уверенно описывает типичные Go HTTP services и пригоден для docs секций.
+
 ## Epic RAG — Vector Index And Retrieval
 
 ### RAG-001 — Выбрать модель хранения в Qdrant
