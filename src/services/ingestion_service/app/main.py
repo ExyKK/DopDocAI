@@ -5,9 +5,8 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from app.api.routes.rag import router as rag_router
-from app.core.config import settings
 from app.api.deps import get_embedder, get_treesitter
+from app.core.config import settings
 
 logger = logging.getLogger("ingestion_service")
 
@@ -26,19 +25,20 @@ async def lifespan(app: FastAPI):
 
     t0 = time.monotonic()
     try:
-        logger.info("Warmup: initializing embedder (model=%s)...", settings.jina_model)
-        emb = get_embedder()
-        logger.info("Warmup: embedder initialized.")
-
         logger.info("Warmup: initializing tree-sitter...")
         get_treesitter()
         logger.info("Warmup: tree-sitter initialized.")
 
-        try:
-            emb.encode(["warmup"], prompt_name="code2code_document")
-            logger.info("Warmup: embedder encode OK.")
-        except Exception as e:
-            logger.warning("Warmup: encode skipped/failed: %s", e)
+        if settings.enable_legacy_rag:
+            logger.info("Warmup: initializing legacy embedder (model=%s)...", settings.jina_model)
+            emb = get_embedder()
+            logger.info("Warmup: legacy embedder initialized.")
+
+            try:
+                emb.encode(["warmup"], prompt_name="code2code_document")
+                logger.info("Warmup: legacy embedder encode OK.")
+            except Exception as e:
+                logger.warning("Warmup: legacy embedder encode skipped/failed: %s", e)
 
         dt = time.monotonic() - t0
         logger.info("Warmup complete in %.2fs. Service is ready.", dt)
@@ -59,7 +59,11 @@ def create_app() -> FastAPI:
     async def healthcheck():
         return {"service": settings.service_name, "status": "healthy"}
 
-    app.include_router(rag_router)
+    if settings.enable_legacy_rag:
+        from app.api.routes.rag import router as rag_router
+
+        app.include_router(rag_router)
+
     return app
 
 

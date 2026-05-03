@@ -145,9 +145,8 @@ services:
       INGEST_REPOS_SERVICE_URL: http://repository_service:19200
       INGEST_DATABASE_URL: postgresql://dopdoc:dopdoc@postgres:5432/dopdoc
       INGEST_REPO_DB_SCHEMA: repo
-      INGEST_QDRANT_URL: http://qdrant:6333
-      INGEST_QDRANT_API_KEY: ""
       INGEST_PORT: 19100
+      INGEST_ENABLE_LEGACY_RAG: "false"
 
       # MinIO (артефакты типа go_symbols.json, опционально)
       DOPDOC_S3_ENDPOINT: http://minio:9000
@@ -159,25 +158,12 @@ services:
       # OTEL (позже подключим в коде)
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
       OTEL_SERVICE_NAME: ingestion_service
-
-      # ML params
-      INGEST_JINA_MODEL: jinaai/jina-code-embeddings-0.5b
-      INGEST_MAX_TOKENS: "512"
-      INGEST_OVERLAP: "64"
-      INGEST_VECTOR_SIZE: "896"
-      INGEST_QDRANT_BATCH_SIZE: "64"
-      HF_HOME: /hf_cache
-      TRANSFORMERS_CACHE: /hf_cache/transformers
-      SENTENCE_TRANSFORMERS_HOME: /hf_cache/sentence_transformers
     ports:
       - "19100:19100"
     volumes:
       - ./src/services/ingestion_service:/app/src/services/ingestion_service
-      - hf_cache:/hf_cache
     depends_on:
       repository_service:
-        condition: service_started
-      qdrant:
         condition: service_started
 
   ingestion_worker:
@@ -429,7 +415,6 @@ services:
 volumes:
   pg_data:
   qdrant_data:
-  hf_cache:
   minio_data:
   grafana_data:
 

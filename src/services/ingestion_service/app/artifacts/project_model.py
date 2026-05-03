@@ -22,14 +22,48 @@ _HTTP_IMPORTS = {
     "github.com/gorilla/mux": "gorilla_mux",
 }
 _HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
-_HTTP_HANDLE_RE = re.compile(r"\bhttp\.Handle(?:Func)?\s*\(\s*([\"`])([^\"`]+)\1")
-_HTTP_METHOD_CALL_RE = re.compile(
-    r"\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|Get|Post|Put|Delete|Patch|Head|Options)\s*"
-    r"\(\s*([\"`])([^\"`]+)\2"
+_HTTP_METHOD_NAMES = (
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    "HEAD",
+    "OPTIONS",
+    "Get",
+    "Post",
+    "Put",
+    "Delete",
+    "Patch",
+    "Head",
+    "Options",
+)
+_HTTP_ROUTE_METHOD_RE = re.compile(
+    r"\b(?P<receiver>[A-Za-z_]\w*)\.(?P<method>"
+    + "|".join(_HTTP_METHOD_NAMES)
+    + r")\s*\(",
+    re.DOTALL,
+)
+_HTTP_HANDLE_RE = re.compile(
+    r"\b(?P<receiver>[A-Za-z_]\w*|http)\.(?P<method>Handle|HandleFunc)\s*\(",
+    re.DOTALL,
 )
 _HTTP_METHOD_FUNC_RE = re.compile(
-    r"\.(?:Method|MethodFunc|HandleFunc)\s*\(\s*([\"`])([A-Z]+)\1\s*,\s*([\"`])([^\"`]+)\3"
+    r"\b(?P<receiver>[A-Za-z_]\w*)\.(?P<method>Method|MethodFunc)\s*\(",
+    re.DOTALL,
 )
+_HTTP_METHODS_CHAIN_RE = re.compile(r"\.Methods\s*\((?P<args>[^)]*)\)", re.DOTALL)
+_HTTP_GROUP_ASSIGN_RE = re.compile(
+    r"\b(?P<target>[A-Za-z_]\w*)\s*(?::=|=)\s*(?P<base>[A-Za-z_]\w*)\."
+    r"(?P<kind>Group|PathPrefix)\s*\(",
+    re.DOTALL,
+)
+_HTTP_ROUTE_BLOCK_RE = re.compile(
+    r"\b(?P<base>[A-Za-z_]\w*)\.Route\s*\(\s*(?P<quote>[\"`])(?P<prefix>.*?)(?P=quote)"
+    r"\s*,\s*func\s*\(\s*(?P<target>[A-Za-z_]\w*)",
+    re.DOTALL,
+)
+_HTTP_LITERAL_RE = re.compile(r"^\s*(?P<quote>[\"`])(?P<value>.*?)(?P=quote)\s*$", re.DOTALL)
 
 
 def build_project_model_artifact(
@@ -53,7 +87,7 @@ def build_project_model_artifact(
     symbol_model = _build_symbol_model(go_symbols)
     configuration_model = _build_configuration_model(config_inventory)
     external_integrations = _detect_external_integrations(package_graph, config_inventory)
-    http_surface = _detect_http_surface(repo_root, package_graph)
+    http_surface = _detect_http_surface(repo_root, package_graph, go_symbols)
 
     summary = {
         "files_total": file_inventory.get("summary", {}).get("files_total", snapshot_metadata["files_total"]),
@@ -323,8 +357,15 @@ def _detect_external_integrations(
     return integrations
 
 
-def _detect_http_surface(repo_root: Path, package_graph: dict[str, Any]) -> dict[str, Any]:
+def _detect_http_surface(
+    repo_root: Path,
+    package_graph: dict[str, Any],
+    go_symbols: dict[str, Any],
+) -> dict[str, Any]:
     http_imports: dict[str, set[str]] = defaultdict(set)
+    file_packages = _build_file_package_lookup(package_graph)
+    symbol_lookup = _build_symbol_lookup(go_symbols)
+
     for package in package_graph.get("packages", []):
         for import_path in package.get("standard_library_imports", []) + package.get("external_imports", []):
             framework = _HTTP_IMPORTS.get(import_path)
@@ -333,72 +374,555 @@ def _detect_http_surface(repo_root: Path, package_graph: dict[str, Any]) -> dict
                     http_imports[file_path].add(framework)
 
     routes: list[dict[str, Any]] = []
+    unsupported_patterns: list[dict[str, Any]] = []
     for file_path, frameworks in sorted(http_imports.items()):
         source_path = repo_root / file_path
         if not source_path.exists():
             continue
 
         lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        for line_number, line in enumerate(lines, start=1):
-            routes.extend(_extract_http_routes(file_path, line_number, line, sorted(frameworks)))
+        package_ref = _primary_file_package(file_packages.get(file_path, []))
+        extracted = _extract_http_routes_from_file(
+            file_path=file_path,
+            lines=lines,
+            frameworks=sorted(frameworks),
+            package_ref=package_ref,
+            symbol_lookup=symbol_lookup,
+        )
+        routes.extend(extracted["routes"])
+        unsupported_patterns.extend(extracted["unsupported_patterns"])
 
-    routes.sort(key=lambda item: (item["file_path"], item["line"], item["method"], item["path"]))
+    routes = _dedupe_routes(routes)
+    routes.sort(key=lambda item: (item["file_path"], item["line"], item["method"] or "", item["path"]))
+    unsupported_patterns.sort(
+        key=lambda item: (item["file_path"], item["line"], item["kind"], item["expression"])
+    )
     frameworks = sorted({framework for values in http_imports.values() for framework in values})
     detected = bool(routes) or any(framework != "net_http" for framework in frameworks)
-    confidence = "high" if routes else "medium" if detected else "none"
+    confidence = "high" if routes else "medium" if detected or unsupported_patterns else "none"
 
     return {
         "detected": detected,
         "confidence": confidence,
         "frameworks": frameworks,
         "routes": routes,
+        "unsupported_patterns": unsupported_patterns,
     }
 
 
-def _extract_http_routes(
+def _extract_http_routes_from_file(
     file_path: str,
-    line_number: int,
-    line: str,
+    lines: list[str],
     frameworks: list[str],
-) -> list[dict[str, Any]]:
+    package_ref: dict[str, Any] | None,
+    symbol_lookup: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
     routes: list[dict[str, Any]] = []
+    unsupported_patterns: list[dict[str, Any]] = []
+    receiver_prefixes: dict[str, str] = {}
 
-    for match in _HTTP_HANDLE_RE.finditer(line):
-        routes.append(
-            {
-                "method": None,
-                "path": match.group(2),
-                "framework": "net_http",
-                "file_path": file_path,
-                "line": line_number,
-            }
-        )
+    for statement in _iter_http_call_statements(lines):
+        _update_receiver_prefixes(receiver_prefixes, statement["text"])
+        statement_prefixes = _route_block_prefixes(receiver_prefixes, statement["text"])
+        route_context = {
+            "file_path": file_path,
+            "frameworks": frameworks,
+            "package": package_ref,
+            "symbol_lookup": symbol_lookup,
+            "receiver_prefixes": {**receiver_prefixes, **statement_prefixes},
+        }
 
-    for match in _HTTP_METHOD_CALL_RE.finditer(line):
-        method = match.group(1).upper()
-        if method in _HTTP_METHODS:
-            routes.append(
-                {
-                    "method": method,
-                    "path": match.group(3),
-                    "framework": _preferred_framework(frameworks),
-                    "file_path": file_path,
-                    "line": line_number,
-                }
+        routes.extend(_extract_method_routes(statement, route_context))
+        routes.extend(_extract_method_func_routes(statement, route_context))
+        routes.extend(_extract_handle_routes(statement, route_context))
+        unsupported_patterns.extend(_extract_unsupported_http_patterns(statement, route_context))
+
+    return {"routes": routes, "unsupported_patterns": unsupported_patterns}
+
+
+def _iter_http_call_statements(lines: list[str]) -> list[dict[str, Any]]:
+    statements: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not _looks_like_http_statement(line):
+            index += 1
+            continue
+
+        start_line = index + 1
+        chunks = [line]
+        paren_balance = _paren_delta(line)
+        brace_balance = _brace_delta(line)
+        index += 1
+        while index < len(lines):
+            previous = chunks[-1].strip()
+            next_line = lines[index]
+            next_stripped = next_line.strip()
+            should_continue = (
+                paren_balance > 0
+                or brace_balance > 0
+                or previous.endswith(".")
+                or next_stripped.startswith(".")
             )
+            if not should_continue:
+                break
 
-    for match in _HTTP_METHOD_FUNC_RE.finditer(line):
+            chunks.append(next_line)
+            paren_balance += _paren_delta(next_line)
+            brace_balance += _brace_delta(next_line)
+            index += 1
+
+        statements.append({"line": start_line, "text": "\n".join(chunks)})
+
+    return statements
+
+
+def _looks_like_http_statement(line: str) -> bool:
+    return any(
+        token in line
+        for token in (
+            ".GET",
+            ".POST",
+            ".PUT",
+            ".DELETE",
+            ".PATCH",
+            ".HEAD",
+            ".OPTIONS",
+            ".Get",
+            ".Post",
+            ".Put",
+            ".Delete",
+            ".Patch",
+            ".Head",
+            ".Options",
+            ".Method",
+            ".MethodFunc",
+            ".Handle",
+            ".HandleFunc",
+            ".Methods",
+            ".Group",
+            ".Route",
+            ".PathPrefix",
+            "http.Handle",
+        )
+    )
+
+
+def _update_receiver_prefixes(receiver_prefixes: dict[str, str], statement: str) -> None:
+    for match in _HTTP_GROUP_ASSIGN_RE.finditer(statement):
+        args = _extract_call_args(statement, match.end() - 1)
+        prefix = _literal_arg(args[0]) if args else None
+        if prefix is None:
+            continue
+
+        base_prefix = receiver_prefixes.get(match.group("base"))
+        receiver_prefixes[match.group("target")] = _join_route_paths(base_prefix, prefix)
+
+
+def _route_block_prefixes(receiver_prefixes: dict[str, str], statement: str) -> dict[str, str]:
+    prefixes: dict[str, str] = {}
+    for match in _HTTP_ROUTE_BLOCK_RE.finditer(statement):
+        base_prefix = receiver_prefixes.get(match.group("base"))
+        prefixes[match.group("target")] = _join_route_paths(base_prefix, match.group("prefix"))
+
+    return prefixes
+
+
+def _extract_method_routes(statement: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    text = statement["text"]
+    for match in _HTTP_ROUTE_METHOD_RE.finditer(text):
+        args = _extract_call_args(text, match.end() - 1)
+        path = _literal_arg(args[0]) if args else None
+        if path is None:
+            continue
+
+        method = match.group("method").upper()
+        if method not in _HTTP_METHODS:
+            continue
+
+        receiver = match.group("receiver")
+        handler_expression = args[1] if len(args) > 1 else None
         routes.append(
-            {
-                "method": match.group(2),
-                "path": match.group(4),
-                "framework": _preferred_framework(frameworks),
-                "file_path": file_path,
-                "line": line_number,
-            }
+            _route_record(
+                context,
+                line=statement["line"] + text[: match.start()].count("\n"),
+                receiver=receiver,
+                method=method,
+                path=path,
+                framework=_framework_for_method_call(match.group("method"), context["frameworks"]),
+                handler_expression=handler_expression,
+            )
         )
 
     return routes
+
+
+def _extract_method_func_routes(statement: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    text = statement["text"]
+    for match in _HTTP_METHOD_FUNC_RE.finditer(text):
+        args = _extract_call_args(text, match.end() - 1)
+        method = _literal_arg(args[0]).upper() if args and _literal_arg(args[0]) else None
+        path = _literal_arg(args[1]) if len(args) > 1 else None
+        if method not in _HTTP_METHODS or path is None:
+            continue
+
+        receiver = match.group("receiver")
+        handler_expression = args[2] if len(args) > 2 else None
+        routes.append(
+            _route_record(
+                context,
+                line=statement["line"] + text[: match.start()].count("\n"),
+                receiver=receiver,
+                method=method,
+                path=path,
+                framework=_framework_for_method_func_call(context["frameworks"]),
+                handler_expression=handler_expression,
+            )
+        )
+
+    return routes
+
+
+def _extract_handle_routes(statement: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    text = statement["text"]
+    for match in _HTTP_HANDLE_RE.finditer(text):
+        args = _extract_call_args(text, match.end() - 1)
+        path = _literal_arg(args[0]) if args else None
+        if path is None:
+            continue
+
+        receiver = match.group("receiver")
+        handler_expression = args[1] if len(args) > 1 else None
+        methods = _method_chain_methods(text[match.end() :])
+        framework = "net_http" if receiver == "http" else _framework_for_handle_call(
+            context["frameworks"],
+            has_methods=bool(methods),
+        )
+        for method in methods or [None]:
+            routes.append(
+                _route_record(
+                    context,
+                    line=statement["line"] + text[: match.start()].count("\n"),
+                    receiver=receiver,
+                    method=method,
+                    path=path,
+                    framework=framework,
+                    handler_expression=handler_expression,
+                )
+            )
+
+    return routes
+
+
+def _extract_unsupported_http_patterns(
+    statement: dict[str, Any],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    unsupported: list[dict[str, Any]] = []
+    text = statement["text"]
+    for match in list(_HTTP_ROUTE_METHOD_RE.finditer(text)) + list(_HTTP_HANDLE_RE.finditer(text)):
+        args = _extract_call_args(text, match.end() - 1)
+        if not args or _literal_arg(args[0]) is not None:
+            continue
+
+        unsupported.append(
+            {
+                "kind": "dynamic_route_path",
+                "framework": _preferred_framework(context["frameworks"]),
+                "file_path": context["file_path"],
+                "line": statement["line"] + text[: match.start()].count("\n"),
+                "expression": _compact_expression(args[0]),
+                "reason": "route path is not a string literal",
+            }
+        )
+
+    for match in _HTTP_GROUP_ASSIGN_RE.finditer(text):
+        args = _extract_call_args(text, match.end() - 1)
+        if not args or _literal_arg(args[0]) is not None:
+            continue
+
+        unsupported.append(
+            {
+                "kind": "dynamic_route_group",
+                "framework": _preferred_framework(context["frameworks"]),
+                "file_path": context["file_path"],
+                "line": statement["line"] + text[: match.start()].count("\n"),
+                "expression": _compact_expression(args[0]),
+                "reason": "route group prefix is not a string literal",
+            }
+        )
+
+    return unsupported
+
+
+def _route_record(
+    context: dict[str, Any],
+    *,
+    line: int,
+    receiver: str,
+    method: str | None,
+    path: str,
+    framework: str | None,
+    handler_expression: str | None,
+) -> dict[str, Any]:
+    package_ref = context["package"]
+    handler = _resolve_handler(handler_expression, package_ref, context["symbol_lookup"])
+    return {
+        "method": method,
+        "path": _join_route_paths(context["receiver_prefixes"].get(receiver), path),
+        "framework": framework,
+        "file_path": context["file_path"],
+        "line": line,
+        "package": package_ref,
+        "handler": handler,
+        "confidence": "high" if _literal_text(path) else "medium",
+    }
+
+
+def _extract_call_args(text: str, open_paren_index: int) -> list[str]:
+    if open_paren_index < 0 or open_paren_index >= len(text) or text[open_paren_index] != "(":
+        return []
+
+    args: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    index = open_paren_index + 1
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            current.append(char)
+            if char == quote and (quote == "`" or text[index - 1] != "\\"):
+                quote = None
+            index += 1
+            continue
+
+        if char in {'"', "`"}:
+            quote = char
+            current.append(char)
+        elif char in "([{":
+            depth += 1
+            current.append(char)
+        elif char in ")]}":
+            if depth == 0 and char == ")":
+                value = "".join(current).strip()
+                if value:
+                    args.append(value)
+                return args
+            depth = max(0, depth - 1)
+            current.append(char)
+        elif char == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        index += 1
+
+    return args
+
+
+def _literal_arg(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    match = _HTTP_LITERAL_RE.match(value)
+    return match.group("value") if match else None
+
+
+def _literal_text(value: str | None) -> bool:
+    return value is not None and value != ""
+
+
+def _method_chain_methods(text: str) -> list[str]:
+    match = _HTTP_METHODS_CHAIN_RE.search(text)
+    if match is None:
+        return []
+
+    methods = []
+    for arg in _split_args(match.group("args")):
+        method = _literal_arg(arg)
+        if method is not None and method.upper() in _HTTP_METHODS:
+            methods.append(method.upper())
+
+    return sorted(set(methods))
+
+
+def _split_args(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_handler(
+    handler_expression: str | None,
+    package_ref: dict[str, Any] | None,
+    symbol_lookup: dict[str, Any],
+) -> dict[str, Any] | None:
+    expression = _normalize_handler_expression(handler_expression)
+    if expression is None:
+        return None
+
+    symbol = None
+    if package_ref is not None:
+        package_name = package_ref.get("name")
+        symbol = symbol_lookup["by_package_and_name"].get((package_name, expression))
+
+    if symbol is None:
+        symbol = symbol_lookup["by_qualified_name"].get(expression)
+
+    if symbol is None and "." in expression:
+        receiver, name = expression.rsplit(".", 1)
+        symbol = symbol_lookup["by_package_and_name"].get((receiver, name))
+
+    if symbol is None:
+        return {"expression": expression, "symbol": None}
+
+    return {
+        "expression": expression,
+        "symbol": {
+            "symbol_id": symbol["symbol_id"],
+            "qualified_name": symbol["qualified_name"],
+            "kind": symbol["kind"],
+            "file_path": symbol["file_path"],
+            "start_line": symbol["start_line"],
+            "end_line": symbol["end_line"],
+        },
+    }
+
+
+def _normalize_handler_expression(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    expression = _compact_expression(value).removeprefix("&")
+    if not expression or expression.startswith("func(") or expression.startswith("func "):
+        return expression or None
+
+    return expression
+
+
+def _compact_expression(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def _build_file_package_lookup(package_graph: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    lookup: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for package in package_graph.get("packages", []):
+        ref = {
+            "package_id": package["package_id"],
+            "name": package["name"],
+            "dir_path": package["dir_path"],
+            "import_path": package.get("import_path"),
+        }
+        for file_path in package.get("files", []):
+            lookup[file_path].append(ref)
+
+    for refs in lookup.values():
+        refs.sort(key=lambda item: (item["name"].endswith("_test"), item["package_id"]))
+
+    return lookup
+
+
+def _primary_file_package(packages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return packages[0] if packages else None
+
+
+def _build_symbol_lookup(go_symbols: dict[str, Any]) -> dict[str, Any]:
+    by_qualified_name: dict[str, dict[str, Any]] = {}
+    by_package_and_name: dict[tuple[str | None, str], dict[str, Any]] = {}
+    for symbol in go_symbols.get("symbols", []):
+        by_qualified_name[symbol["qualified_name"]] = symbol
+        by_package_and_name[(symbol.get("package"), symbol["name"])] = symbol
+
+    return {
+        "by_qualified_name": by_qualified_name,
+        "by_package_and_name": by_package_and_name,
+    }
+
+
+def _dedupe_routes(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for route in routes:
+        key = (
+            route["file_path"],
+            route["line"],
+            route["method"],
+            route["path"],
+            route["handler"]["expression"] if route.get("handler") else None,
+        )
+        deduped[key] = route
+
+    return list(deduped.values())
+
+
+def _join_route_paths(prefix: str | None, path: str) -> str:
+    if prefix is None or prefix in {"", "/"}:
+        return path or "/"
+
+    if path in {"", "/"}:
+        return prefix
+
+    return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _framework_for_method_call(method_name: str, frameworks: list[str]) -> str | None:
+    if method_name.isupper():
+        for framework in ("gin", "echo", "fiber"):
+            if framework in frameworks:
+                return framework
+
+    for framework in ("chi", "fiber", "gin", "echo"):
+        if framework in frameworks:
+            return framework
+
+    return _preferred_framework(frameworks)
+
+
+def _framework_for_handle_call(frameworks: list[str], *, has_methods: bool) -> str | None:
+    if has_methods and "gorilla_mux" in frameworks:
+        return "gorilla_mux"
+
+    for framework in ("chi", "gorilla_mux", "net_http"):
+        if framework in frameworks:
+            return framework
+
+    return _preferred_framework(frameworks)
+
+
+def _framework_for_method_func_call(frameworks: list[str]) -> str | None:
+    for framework in ("chi", "gorilla_mux"):
+        if framework in frameworks:
+            return framework
+
+    return _preferred_framework(frameworks)
+
+
+def _paren_delta(line: str) -> int:
+    return _char_delta(line, "(", ")")
+
+
+def _brace_delta(line: str) -> int:
+    return _char_delta(line, "{", "}")
+
+
+def _char_delta(line: str, open_char: str, close_char: str) -> int:
+    delta = 0
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote and (quote == "`" or line[index - 1] != "\\"):
+                quote = None
+            continue
+
+        if char in {'"', "`"}:
+            quote = char
+        elif char == open_char:
+            delta += 1
+        elif char == close_char:
+            delta -= 1
+
+    return delta
 
 
 def _source_artifacts(*artifacts: BuiltAnalysisArtifact | dict[str, Any]) -> list[dict[str, Any]]:

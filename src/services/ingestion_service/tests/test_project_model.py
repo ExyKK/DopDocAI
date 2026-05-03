@@ -200,25 +200,128 @@ database:
     assert ("database", "sql") in integrations
     assert ("network", "chi") in integrations
 
-    assert document["http_surface"] == {
-        "confidence": "high",
-        "detected": True,
-        "frameworks": ["chi", "net_http"],
-        "routes": [
-            {
-                "file_path": "cmd/api/main.go",
-                "framework": "chi",
-                "line": 13,
-                "method": "GET",
-                "path": "/health",
-            }
-        ],
+    assert document["http_surface"]["confidence"] == "high"
+    assert document["http_surface"]["detected"] is True
+    assert document["http_surface"]["frameworks"] == ["chi", "net_http"]
+    assert document["http_surface"]["unsupported_patterns"] == []
+    assert len(document["http_surface"]["routes"]) == 1
+    route = document["http_surface"]["routes"][0]
+    assert {
+        "file_path": route["file_path"],
+        "framework": route["framework"],
+        "line": route["line"],
+        "method": route["method"],
+        "path": route["path"],
+    } == {
+        "file_path": "cmd/api/main.go",
+        "framework": "chi",
+        "line": 13,
+        "method": "GET",
+        "path": "/health",
     }
+    assert route["package"]["package_id"] == "github.com/acme/project/cmd/api#main"
+    assert route["handler"]["expression"] == "service.Health"
+    assert route["handler"]["symbol"]["qualified_name"] == "service.Health"
     assert [item["artifact_kind"] for item in document["source_artifacts"]] == [
         "file_inventory",
         "go_symbols",
         "package_graph",
         "config_inventory",
+    ]
+
+
+def test_build_project_model_artifact_extracts_grouped_multiline_http_routes(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / "go.mod",
+        """module github.com/acme/project
+
+go 1.22
+require (
+    github.com/gin-gonic/gin v1.10.0
+    github.com/go-chi/chi/v5 v5.0.0
+    github.com/gorilla/mux v1.8.1
+)
+""",
+    )
+    _write_text(
+        tmp_path / "cmd" / "api" / "main.go",
+        """package main
+
+import (
+    "github.com/acme/project/internal/service"
+    "github.com/gin-gonic/gin"
+    "github.com/go-chi/chi/v5"
+    "github.com/gorilla/mux"
+)
+
+func main() {
+    r := chi.NewRouter()
+    r.Route("/api", func(r chi.Router) {
+        r.Get(
+            "/health",
+            service.Health,
+        )
+        r.MethodFunc(
+            "POST",
+            "/items",
+            service.Health,
+        )
+        dynamicPath := "/dynamic"
+        r.Get(dynamicPath, service.Health)
+    })
+
+    g := gin.Default()
+    v1 := g.Group("/v1")
+    v1.POST(
+        "/users",
+        service.Health,
+    )
+
+    m := mux.NewRouter()
+    m.HandleFunc("/legacy", service.Health).Methods("GET", "POST")
+}
+""",
+    )
+    _write_text(
+        tmp_path / "internal" / "service" / "service.go",
+        """package service
+
+func Health() {}
+""",
+    )
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+    metadata = _snapshot_metadata(tmp_path, repo)
+
+    document = _build_project_model_document(tmp_path, metadata)
+
+    assert document["summary"]["http_routes_total"] == 5
+    assert document["http_surface"]["frameworks"] == ["chi", "gin", "gorilla_mux"]
+    routes = {
+        (route["framework"], route["method"], route["path"]): route
+        for route in document["http_surface"]["routes"]
+    }
+
+    assert ("chi", "GET", "/api/health") in routes
+    assert ("chi", "POST", "/api/items") in routes
+    assert ("gin", "POST", "/v1/users") in routes
+    assert ("gorilla_mux", "GET", "/legacy") in routes
+    assert ("gorilla_mux", "POST", "/legacy") in routes
+    assert routes[("chi", "GET", "/api/health")]["handler"]["symbol"]["qualified_name"] == "service.Health"
+    assert routes[("gin", "POST", "/v1/users")]["package"]["package_id"] == "github.com/acme/project/cmd/api#main"
+
+    assert document["http_surface"]["unsupported_patterns"] == [
+        {
+            "expression": "dynamicPath",
+            "file_path": "cmd/api/main.go",
+            "framework": "chi",
+            "kind": "dynamic_route_path",
+            "line": 23,
+            "reason": "route path is not a string literal",
+        }
     ]
 
 
@@ -231,6 +334,75 @@ def _commit_all(repo: Repo, repo_root: Path) -> None:
     repo.index.add(paths)
     actor = Actor("DopDoc", "dopdoc@example.com")
     repo.index.commit("init", author=actor, committer=actor)
+
+
+def _snapshot_metadata(repo_root: Path, repo: Repo) -> dict[str, object]:
+    commit = repo.head.commit
+    metadata: dict[str, object] = {
+        "branch_name": "main",
+        "commit_sha": commit.hexsha.lower(),
+        "tree_hash": commit.tree.hexsha.lower(),
+        "go_files_total": sum(
+            1
+            for path in repo_root.rglob("*.go")
+            if path.is_file() and ".git" not in path.parts
+        ),
+        "readme_files_total": sum(
+            1
+            for path in repo_root.rglob("*")
+            if path.is_file() and path.name.lower().startswith("readme") and ".git" not in path.parts
+        ),
+        "bytes_total": sum(
+            path.stat().st_size
+            for path in repo_root.rglob("*")
+            if path.is_file() and ".git" not in path.parts
+        ),
+    }
+    metadata["files_total"] = len(
+        [path for path in repo_root.rglob("*") if path.is_file() and ".git" not in path.parts]
+    )
+    return metadata
+
+
+def _build_project_model_document(repo_root: Path, metadata: dict[str, object]) -> dict[str, object]:
+    file_inventory = build_file_inventory_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+    go_symbols = build_go_symbols_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+    package_graph = build_package_graph_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+        go_symbols_artifact=go_symbols,
+    )
+    config_inventory = build_config_inventory_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+        file_inventory_artifact=file_inventory,
+        go_symbols_artifact=go_symbols,
+    )
+    artifact = build_project_model_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+        file_inventory_artifact=file_inventory,
+        go_symbols_artifact=go_symbols,
+        package_graph_artifact=package_graph,
+        config_inventory_artifact=config_inventory,
+    )
+    return json.loads(artifact.payload.decode("utf-8"))
 
 
 def _write_text(path: Path, content: str) -> None:

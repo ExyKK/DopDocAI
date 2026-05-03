@@ -477,6 +477,7 @@
 ### INGEST-013 — Улучшить `http_surface` detection
 - Priority: `P1`
 - Depends on: `INGEST-007`
+- Status: `completed`
 - Goal: повысить качество секций документации про API surface без перехода к свободному RAG.
 - Tasks:
 - извлекать routes из многострочных вызовов и route groups;

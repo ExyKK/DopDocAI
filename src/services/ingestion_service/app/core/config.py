@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 19100
     reload: bool = False
+    enable_legacy_rag: bool = False
 
     worker_id: str | None = None
     worker_poll_interval_s: float = 5.0
