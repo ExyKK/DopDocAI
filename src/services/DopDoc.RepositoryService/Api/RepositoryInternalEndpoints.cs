@@ -39,6 +39,25 @@ public static class RepositoryInternalEndpoints
         })
         .WithName("InternalGetRepositorySnapshotByCommit");
 
+        g.MapGet("/{repository_id:guid}/snapshots/previous", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromQuery(Name = "branch_name")] string branchName,
+            [FromQuery(Name = "head_commit_sha")] string headCommitSha,
+            RepositorySnapshotApplicationService snapshots,
+            CancellationToken ct) =>
+        {
+            var snapshot = await snapshots.GetPreviousForBranchAsync(
+                repositoryId,
+                branchName,
+                headCommitSha,
+                ct);
+
+            return snapshot is null
+                ? Results.NoContent()
+                : Results.Ok(RepositoryContractMapper.ToResponse(snapshot));
+        })
+        .WithName("InternalGetPreviousRepositorySnapshot");
+
         g.MapPost("/{repository_id:guid}/snapshots/{snapshot_id:guid}/activate", async (
             [FromRoute(Name = "repository_id")] Guid repositoryId,
             [FromRoute(Name = "snapshot_id")] Guid snapshotId,

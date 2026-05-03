@@ -38,6 +38,9 @@ def build_commit_log_artifact(
         head_commit_sha=head_commit_sha,
         base_snapshot_id=base_snapshot_id,
         base_commit_sha=base_commit_sha,
+        base_snapshot_fallback_reason=_optional_text(
+            snapshot_metadata.get("base_snapshot_fallback_reason")
+        ),
         max_commits=max_commits,
     )
     commit_records, touched_files, touched_packages, change_type_counts = _build_change_records(
@@ -104,6 +107,7 @@ def _collect_commits(
     head_commit_sha: str,
     base_snapshot_id: str | None,
     base_commit_sha: str | None,
+    base_snapshot_fallback_reason: str | None,
     max_commits: int,
 ) -> tuple[dict[str, Any], list[Any]]:
     base_commit_reachable: bool | None = None
@@ -124,6 +128,12 @@ def _collect_commits(
         "base_snapshot_id": base_snapshot_id,
         "base_commit_sha": base_commit_sha,
         "base_commit_reachable": base_commit_reachable,
+        "fallback_reason": _range_fallback_reason(
+            base_snapshot_id=base_snapshot_id,
+            base_commit_sha=base_commit_sha,
+            base_commit_reachable=base_commit_reachable,
+            explicit_reason=base_snapshot_fallback_reason,
+        ),
         "revision": revision,
         "max_commits": max_commits,
         "commits_available": commits_available,
@@ -432,6 +442,28 @@ def _is_ancestor(repo: Repo, ancestor_sha: str, head_sha: str) -> bool:
         return True
     except GitCommandError:
         return False
+
+
+def _range_fallback_reason(
+    *,
+    base_snapshot_id: str | None,
+    base_commit_sha: str | None,
+    base_commit_reachable: bool | None,
+    explicit_reason: str | None,
+) -> str | None:
+    if base_commit_reachable is True:
+        return None
+
+    if explicit_reason is not None:
+        return explicit_reason
+
+    if base_commit_sha is None:
+        return "base_snapshot_missing" if base_snapshot_id is None else "base_commit_missing"
+
+    if base_commit_reachable is False:
+        return "base_commit_unreachable"
+
+    return "base_snapshot_missing"
 
 
 def _change_type(status_code: str) -> str:

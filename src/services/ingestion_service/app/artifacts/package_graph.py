@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from git import Repo
+
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.worker.snapshot_resolver import list_head_tree_files
 
 PACKAGE_GRAPH_ARTIFACT_KIND = "package_graph"
 PACKAGE_GRAPH_SCHEMA_VERSION = 1
@@ -14,6 +17,7 @@ PACKAGE_GRAPH_SCHEMA_VERSION = 1
 
 @dataclass(frozen=True)
 class GoModuleMetadata:
+    root_dir: str
     path: str | None
     go_version: str | None
     toolchain: str | None
@@ -29,12 +33,16 @@ def build_package_graph_artifact(
 ) -> BuiltAnalysisArtifact:
     repo_root = Path(repo_path)
     go_symbols = _load_go_symbols_document(go_symbols_artifact)
-    module = _read_go_module(repo_root)
+    modules = _read_go_modules(repo_root)
+    package_modules = modules or (
+        GoModuleMetadata(root_dir=".", path=None, go_version=None, toolchain=None, go_mod_path=None),
+    )
+    root_module = _root_module_or_empty(modules)
 
-    package_builders = _group_go_files_by_package(go_symbols.get("files", []))
-    packages = _build_packages(package_builders, module)
+    package_builders = _group_go_files_by_package(go_symbols.get("files", []), package_modules)
+    packages = _build_packages(package_builders)
     package_lookup = _build_package_lookup(packages)
-    edges = _build_edges(package_builders, packages, package_lookup, module)
+    edges = _build_edges(package_builders, packages, package_lookup, package_modules)
     entrypoints = [
         {
             "package_id": package["package_id"],
@@ -77,11 +85,12 @@ def build_package_graph_artifact(
             "tree_hash": snapshot_metadata["tree_hash"],
         },
         "module": {
-            "path": module.path,
-            "go_version": module.go_version,
-            "toolchain": module.toolchain,
-            "go_mod_path": module.go_mod_path,
+            "path": root_module.path,
+            "go_version": root_module.go_version,
+            "toolchain": root_module.toolchain,
+            "go_mod_path": root_module.go_mod_path,
         },
+        "modules": [_module_document(module) for module in modules],
         "summary": summary,
         "packages": packages,
         "edges": edges,
@@ -117,8 +126,11 @@ def _load_go_symbols_document(go_symbols_artifact: BuiltAnalysisArtifact | dict[
     return go_symbols_artifact
 
 
-def _group_go_files_by_package(files: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
-    builders: dict[tuple[str, str], dict[str, Any]] = {}
+def _group_go_files_by_package(
+    files: list[dict[str, Any]],
+    modules: tuple[GoModuleMetadata, ...],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    builders: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for file_record in files:
         package_name = file_record.get("package")
@@ -127,10 +139,12 @@ def _group_go_files_by_package(files: list[dict[str, Any]]) -> dict[tuple[str, s
 
         path = _normalize_path(file_record["path"])
         dir_path = _dir_path(path)
-        key = (dir_path, package_name)
+        module = _module_for_dir(dir_path, modules)
+        key = (module.root_dir, dir_path, package_name)
         builder = builders.setdefault(
             key,
             {
+                "module": module,
                 "dir_path": dir_path,
                 "name": package_name,
                 "files": [],
@@ -167,18 +181,21 @@ def _group_go_files_by_package(files: list[dict[str, Any]]) -> dict[tuple[str, s
 
 
 def _build_packages(
-    package_builders: dict[tuple[str, str], dict[str, Any]],
-    module: GoModuleMetadata,
+    package_builders: dict[tuple[str, str, str], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     packages: list[dict[str, Any]] = []
 
-    for (dir_path, package_name), builder in sorted(package_builders.items()):
+    for (_, dir_path, package_name), builder in sorted(package_builders.items()):
+        module = builder["module"]
         files = sorted(builder["files"], key=lambda item: item["path"])
-        import_path = _package_import_path(dir_path, module.path)
-        entrypoint_kind = _entrypoint_kind(dir_path, package_name)
+        import_path = _package_import_path(dir_path, module)
+        entrypoint_kind = _entrypoint_kind(dir_path, package_name, module)
         package = {
             "package_id": _package_id(import_path, dir_path, package_name),
             "name": package_name,
+            "module_id": _module_id(module),
+            "module_root": module.root_dir,
+            "module_path": module.path,
             "dir_path": dir_path,
             "import_path": import_path,
             "files": [file_record["path"] for file_record in files],
@@ -233,12 +250,15 @@ def _build_package_lookup(packages: list[dict[str, Any]]) -> dict[str, dict[str,
 
 
 def _build_edges(
-    package_builders: dict[tuple[str, str], dict[str, Any]],
+    package_builders: dict[tuple[str, str, str], dict[str, Any]],
     packages: list[dict[str, Any]],
     package_lookup: dict[str, dict[str, Any]],
-    module: GoModuleMetadata,
+    modules: tuple[GoModuleMetadata, ...],
 ) -> list[dict[str, Any]]:
-    packages_by_key = {(package["dir_path"], package["name"]): package for package in packages}
+    packages_by_key = {
+        (package["module_root"], package["dir_path"], package["name"]): package
+        for package in packages
+    }
     imports_by_package: dict[str, dict[str, list[dict[str, Any]]]] = {}
     edges: list[dict[str, Any]] = []
 
@@ -253,7 +273,7 @@ def _build_edges(
             target = _resolve_import(
                 import_path,
                 from_dir_path=package["dir_path"],
-                module_path=module.path,
+                modules=modules,
                 package_lookup=package_lookup,
             )
             edge = {
@@ -309,7 +329,7 @@ def _resolve_import(
     import_path: str,
     *,
     from_dir_path: str,
-    module_path: str | None,
+    modules: tuple[GoModuleMetadata, ...],
     package_lookup: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     if import_path == "C":
@@ -320,9 +340,15 @@ def _resolve_import(
         target_package = package_lookup["by_dir"].get(target_dir) if target_dir is not None else None
         return _target("internal", target_package, target_package.get("import_path") if target_package else None, target_dir)
 
-    if module_path and (import_path == module_path or import_path.startswith(f"{module_path}/")):
-        target_package = package_lookup["internal_by_import_path"].get(import_path)
-        return _target("internal", target_package, import_path, _module_relative_dir(module_path, import_path))
+    target_package = package_lookup["internal_by_import_path"].get(import_path)
+    if target_package is not None:
+        return _target("internal", target_package, import_path, target_package["dir_path"])
+
+    local_module = _module_for_import_path(import_path, modules)
+    if local_module is not None:
+        target_dir = _module_relative_dir(local_module, import_path)
+        target_package = package_lookup["by_dir"].get(target_dir)
+        return _target("internal", target_package, import_path, target_dir)
 
     vendor_package = package_lookup["vendor_by_import_path"].get(import_path)
     if vendor_package is not None:
@@ -348,10 +374,20 @@ def _target(
     }
 
 
-def _read_go_module(repo_root: Path) -> GoModuleMetadata:
-    go_mod = repo_root / "go.mod"
-    if not go_mod.exists():
-        return GoModuleMetadata(path=None, go_version=None, toolchain=None, go_mod_path=None)
+def _read_go_modules(repo_root: Path) -> tuple[GoModuleMetadata, ...]:
+    repo = Repo(repo_root)
+    go_mod_paths = sorted(
+        entry.path
+        for entry in list_head_tree_files(repo)
+        if PurePosixPath(entry.path).name == "go.mod" and not _is_vendor_dir(_dir_path(entry.path))
+    )
+
+    return tuple(_read_go_module(repo_root, go_mod_path) for go_mod_path in go_mod_paths)
+
+
+def _read_go_module(repo_root: Path, go_mod_path: str) -> GoModuleMetadata:
+    go_mod = repo_root / go_mod_path
+    root_dir = _dir_path(go_mod_path)
 
     module_path = None
     go_version = None
@@ -372,24 +408,57 @@ def _read_go_module(repo_root: Path) -> GoModuleMetadata:
         elif parts[0] == "toolchain" and toolchain is None:
             toolchain = parts[1]
 
-    return GoModuleMetadata(path=module_path, go_version=go_version, toolchain=toolchain, go_mod_path="go.mod")
+    return GoModuleMetadata(
+        root_dir=root_dir,
+        path=module_path,
+        go_version=go_version,
+        toolchain=toolchain,
+        go_mod_path=go_mod_path,
+    )
 
 
-def _package_import_path(dir_path: str, module_path: str | None) -> str | None:
+def _root_module_or_empty(modules: tuple[GoModuleMetadata, ...]) -> GoModuleMetadata:
+    for module in modules:
+        if module.root_dir == ".":
+            return module
+
+    return GoModuleMetadata(root_dir=".", path=None, go_version=None, toolchain=None, go_mod_path=None)
+
+
+def _module_document(module: GoModuleMetadata) -> dict[str, Any]:
+    return {
+        "module_id": _module_id(module),
+        "root_dir": module.root_dir,
+        "path": module.path,
+        "go_version": module.go_version,
+        "toolchain": module.toolchain,
+        "go_mod_path": module.go_mod_path,
+    }
+
+
+def _package_import_path(dir_path: str, module: GoModuleMetadata) -> str | None:
     if _is_vendor_dir(dir_path):
-        return dir_path.removeprefix("vendor/")
+        return _vendor_import_path(dir_path)
 
-    if module_path is None:
+    if module.path is None:
         return None
 
-    if dir_path == ".":
-        return module_path
+    relative_dir = _relative_to_module_root(module.root_dir, dir_path)
+    if relative_dir is None:
+        return None
 
-    return f"{module_path}/{dir_path}"
+    if relative_dir == ".":
+        return module.path
+
+    return f"{module.path}/{relative_dir}"
 
 
 def _package_id(import_path: str | None, dir_path: str, package_name: str) -> str:
     return f"{import_path or dir_path}#{package_name}"
+
+
+def _module_id(module: GoModuleMetadata) -> str:
+    return module.path or module.root_dir
 
 
 def _primary_package(packages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -404,24 +473,77 @@ def _primary_package(packages: list[dict[str, Any]]) -> dict[str, Any]:
     )[0]
 
 
-def _entrypoint_kind(dir_path: str, package_name: str) -> str | None:
+def _entrypoint_kind(
+    dir_path: str,
+    package_name: str,
+    module: GoModuleMetadata,
+) -> str | None:
     if package_name != "main":
         return None
 
-    if dir_path == "cmd" or dir_path.startswith("cmd/"):
+    relative_dir = _relative_to_module_root(module.root_dir, dir_path) or dir_path
+    if relative_dir == "cmd" or relative_dir.startswith("cmd/"):
         return "cmd"
 
-    if dir_path == ".":
+    if relative_dir == ".":
         return "root"
 
     return "main"
 
 
-def _module_relative_dir(module_path: str, import_path: str) -> str:
-    if import_path == module_path:
+def _module_for_dir(dir_path: str, modules: tuple[GoModuleMetadata, ...]) -> GoModuleMetadata:
+    matches = [
+        module
+        for module in modules
+        if _path_belongs_to_dir(dir_path, module.root_dir)
+    ]
+    if not matches:
+        return GoModuleMetadata(root_dir=".", path=None, go_version=None, toolchain=None, go_mod_path=None)
+
+    return sorted(
+        matches,
+        key=lambda module: (-len(PurePosixPath(module.root_dir).parts), module.root_dir),
+    )[0]
+
+
+def _module_for_import_path(
+    import_path: str,
+    modules: tuple[GoModuleMetadata, ...],
+) -> GoModuleMetadata | None:
+    matches = [
+        module
+        for module in modules
+        if module.path is not None
+        and (import_path == module.path or import_path.startswith(f"{module.path}/"))
+    ]
+    if not matches:
+        return None
+
+    return sorted(matches, key=lambda module: (-len(module.path or ""), module.root_dir))[0]
+
+
+def _module_relative_dir(module: GoModuleMetadata, import_path: str) -> str:
+    if import_path == module.path:
+        return module.root_dir
+
+    suffix = import_path.removeprefix(f"{module.path}/")
+    if module.root_dir == ".":
+        return suffix
+
+    return f"{module.root_dir}/{suffix}"
+
+
+def _relative_to_module_root(module_root: str, dir_path: str) -> str | None:
+    if module_root == ".":
+        return dir_path
+
+    if dir_path == module_root:
         return "."
 
-    return import_path.removeprefix(f"{module_path}/")
+    if dir_path.startswith(f"{module_root}/"):
+        return dir_path.removeprefix(f"{module_root}/")
+
+    return None
 
 
 def _resolve_relative_dir(from_dir_path: str, import_path: str) -> str | None:
@@ -441,6 +563,13 @@ def _looks_like_standard_library(import_path: str) -> bool:
     return "." not in first_segment
 
 
+def _path_belongs_to_dir(path: str, dir_path: str) -> bool:
+    if dir_path == ".":
+        return True
+
+    return path == dir_path or path.startswith(f"{dir_path}/")
+
+
 def _dir_path(path: str) -> str:
     parent = str(PurePosixPath(path).parent)
     return "." if parent == "." else parent
@@ -451,7 +580,17 @@ def _normalize_path(path: str) -> str:
 
 
 def _is_vendor_dir(dir_path: str) -> bool:
-    return dir_path == "vendor" or dir_path.startswith("vendor/")
+    return "vendor" in PurePosixPath(dir_path).parts
+
+
+def _vendor_import_path(dir_path: str) -> str | None:
+    parts = PurePosixPath(dir_path).parts
+    if "vendor" not in parts:
+        return None
+
+    vendor_index = parts.index("vendor")
+    rest = parts[vendor_index + 1 :]
+    return "/".join(rest) if rest else None
 
 
 def _unquote_go_mod_value(value: str) -> str:

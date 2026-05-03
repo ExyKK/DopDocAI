@@ -142,6 +142,33 @@ public sealed class RepositorySnapshotApplicationService
         return snapshot;
     }
 
+    public async Task<RepositorySnapshotEntity?> GetPreviousForBranchAsync(
+        Guid repositoryId,
+        string branchName,
+        string headCommitSha,
+        CancellationToken ct)
+    {
+        var normalizedBranchName = RepositoryBranchName.Require(branchName, "branch_name_required");
+        var normalizedHeadCommitSha = NormalizeGitHash(headCommitSha);
+
+        var repositoryExists = await _db.Repositories
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == repositoryId && x.ArchivedAt == null, ct);
+
+        if (!repositoryExists)
+            throw RepositoryNotFound(repositoryId);
+
+        return await _db.RepositorySnapshots
+            .AsNoTracking()
+            .Where(x =>
+                x.RepositoryId == repositoryId &&
+                x.BranchName == normalizedBranchName &&
+                x.CommitSha != normalizedHeadCommitSha)
+            .OrderByDescending(x => x.CommitCommittedAt ?? x.CommitAuthoredAt ?? x.CreatedAt)
+            .ThenByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<RepositorySnapshotEntity> ActivateAsync(Guid repositoryId, Guid snapshotId, CancellationToken ct)
     {
         var repository = await _db.Repositories.FirstOrDefaultAsync(x => x.Id == repositoryId, ct);

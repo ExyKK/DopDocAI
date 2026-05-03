@@ -84,6 +84,7 @@ func main() {
     assert document["range"]["base_snapshot_id"] == "base-snapshot-id"
     assert document["range"]["base_commit_sha"] == base_commit_sha
     assert document["range"]["base_commit_reachable"] is True
+    assert document["range"]["fallback_reason"] is None
     assert document["range"]["commits_available"] == 2
     assert document["summary"] == {
         "base_commit_reachable": True,
@@ -141,10 +142,39 @@ def test_build_commit_log_artifact_limits_recent_history(tmp_path: Path) -> None
     assert artifact.row_count == 1
     assert document["range"]["mode"] == "recent"
     assert document["range"]["commits_available"] == 3
+    assert document["range"]["fallback_reason"] == "base_snapshot_missing"
     assert document["range"]["truncated"] is True
     assert document["summary"]["commits_total"] == 1
     assert document["summary"]["touched_files_total"] == 1
     assert document["commits"][0]["subject"] == "third"
+
+
+def test_build_commit_log_artifact_records_unreachable_base_fallback(tmp_path: Path) -> None:
+    _write_text(tmp_path / "README.md", "first\n")
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path, "initial")
+
+    _write_text(tmp_path / "README.md", "second\n")
+    _commit_all(repo, tmp_path, "second")
+
+    metadata = _snapshot_metadata(
+        tmp_path,
+        repo,
+        base_commit_sha="f" * 40,
+    )
+    artifact = build_commit_log_artifact(
+        tmp_path,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+
+    document = json.loads(artifact.payload.decode("utf-8"))
+    assert document["range"]["mode"] == "recent"
+    assert document["range"]["base_snapshot_id"] == "base-snapshot-id"
+    assert document["range"]["base_commit_sha"] == "f" * 40
+    assert document["range"]["base_commit_reachable"] is False
+    assert document["range"]["fallback_reason"] == "base_commit_unreachable"
 
 
 def _build_package_graph(repo_root: Path, metadata: dict[str, object]):

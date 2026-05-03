@@ -435,6 +435,7 @@
 ### INGEST-010 — Передавать base snapshot context в `commit_log.json`
 - Priority: `P1`
 - Depends on: `INGEST-008`, `REPO-003`
+- Status: `completed`
 - Goal: сделать `commit_log.json` пригодным для реального diff-aware docs flow, а не только для recent-history режима.
 - Tasks:
 - определить предыдущий snapshot для repository/branch перед сборкой артефактов;
@@ -448,6 +449,7 @@
 ### INGEST-011 — Укрепить compose runtime для artifact publishing
 - Priority: `P1`
 - Depends on: `INGEST-009`
+- Status: `completed`
 - Goal: сделать ручной и локальный запуск artifact pipeline предсказуемым.
 - Tasks:
 - добавить `ingestion_worker` dependency от `minio` healthcheck и `minio_init`;
@@ -460,6 +462,7 @@
 ### INGEST-012 — Поддержать Go multi-module repos в `package_graph.json`
 - Priority: `P0`
 - Depends on: `INGEST-005`
+- Status: `completed`
 - Goal: корректно строить package graph для monorepo и репозиториев с несколькими `go.mod`.
 - Tasks:
 - находить все `go.mod` в tracked tree;

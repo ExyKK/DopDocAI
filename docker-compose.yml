@@ -201,6 +201,8 @@ services:
       DOPDOC_S3_SECRET_KEY: dopdocstorage
       DOPDOC_S3_BUCKET: dopdoc-artifacts
       DOPDOC_S3_REGION: us-east-1
+      DOPDOC_S3_UPLOAD_MAX_ATTEMPTS: "5"
+      DOPDOC_S3_UPLOAD_RETRY_DELAY_S: "1"
 
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
       OTEL_SERVICE_NAME: ingestion_worker
@@ -211,6 +213,10 @@ services:
         condition: service_healthy
       repository_service:
         condition: service_started
+      minio:
+        condition: service_healthy
+      minio_init:
+        condition: service_completed_successfully
 
 #  repos_service:
 #    build:

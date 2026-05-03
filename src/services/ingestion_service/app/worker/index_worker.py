@@ -128,7 +128,12 @@ class IndexWorker:
                 resolved = self._resolver.resolve(run.repository_url, run.branch_name)
                 heartbeat.ensure_alive()
 
-                metadata = resolved.metadata
+                previous_snapshot = self._repository_service.get_previous_snapshot(
+                    run.repository_id,
+                    branch_name=resolved.metadata["branch_name"],
+                    head_commit_sha=resolved.metadata["commit_sha"],
+                )
+                metadata = _with_base_snapshot_context(resolved.metadata, previous_snapshot)
                 self._store.update_progress(
                     run.id,
                     self._settings.worker_id,
@@ -139,6 +144,9 @@ class IndexWorker:
                         "branch_name": metadata["branch_name"],
                         "commit_sha": metadata["commit_sha"],
                         "tree_hash": metadata["tree_hash"],
+                        "base_snapshot_id": metadata.get("base_snapshot_id"),
+                        "base_commit_sha": metadata.get("base_commit_sha"),
+                        "base_snapshot_fallback_reason": metadata.get("base_snapshot_fallback_reason"),
                     },
                 )
                 heartbeat.ensure_alive()
@@ -289,6 +297,8 @@ def main() -> None:
             secret_key=settings.s3_secret_key,
             bucket=settings.s3_bucket,
             region=settings.s3_region,
+            max_attempts=settings.s3_upload_max_attempts,
+            retry_delay_s=settings.s3_upload_retry_delay_s,
         ),
         resolver=SnapshotResolver(GitClient(), settings.clone_root),
         treesitter=TreeSitterManager(),
@@ -309,6 +319,27 @@ def setup_logging() -> None:
 
 def _default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+
+def _with_base_snapshot_context(
+    metadata: dict[str, Any],
+    previous_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    enriched = dict(metadata)
+    if previous_snapshot is None:
+        enriched["base_snapshot_fallback_reason"] = "base_snapshot_missing"
+        return enriched
+
+    enriched["base_snapshot_id"] = previous_snapshot["id"]
+    enriched["base_commit_sha"] = previous_snapshot["commit_sha"]
+    enriched["base_snapshot"] = {
+        "id": previous_snapshot["id"],
+        "branch_name": previous_snapshot.get("branch_name"),
+        "commit_sha": previous_snapshot["commit_sha"],
+        "tree_hash": previous_snapshot.get("tree_hash"),
+        "created_at": previous_snapshot.get("created_at"),
+    }
+    return enriched
 
 
 def _map_error_code(exc: Exception) -> str:

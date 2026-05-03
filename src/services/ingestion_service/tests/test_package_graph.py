@@ -207,6 +207,155 @@ func Load() Config {
     )
 
 
+def test_build_package_graph_artifact_maps_go_multi_module_repos(tmp_path: Path) -> None:
+    _write_text(
+        tmp_path / "go.mod",
+        """module github.com/acme/root
+
+go 1.22
+""",
+    )
+    _write_text(
+        tmp_path / "cmd" / "api" / "main.go",
+        """package main
+
+import (
+    "github.com/acme/root/internal/core"
+    "github.com/acme/shared/codec"
+)
+
+func main() {
+    _ = core.New()
+    _ = codec.Name()
+}
+""",
+    )
+    _write_text(
+        tmp_path / "internal" / "core" / "core.go",
+        """package core
+
+func New() string {
+    return "core"
+}
+""",
+    )
+    _write_text(
+        tmp_path / "modules" / "shared" / "go.mod",
+        """module github.com/acme/shared
+
+go 1.22
+""",
+    )
+    _write_text(
+        tmp_path / "modules" / "shared" / "codec" / "codec.go",
+        """package codec
+
+func Name() string {
+    return "codec"
+}
+""",
+    )
+    _write_text(
+        tmp_path / "modules" / "shared" / "cmd" / "worker" / "main.go",
+        """package main
+
+import "github.com/acme/shared/codec"
+
+func main() {
+    _ = codec.Name()
+}
+""",
+    )
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+
+    commit = repo.head.commit
+    metadata = {
+        "branch_name": "main",
+        "commit_sha": commit.hexsha.lower(),
+        "tree_hash": commit.tree.hexsha.lower(),
+        "go_files_total": 4,
+        "readme_files_total": 0,
+        "bytes_total": sum(
+            path.stat().st_size
+            for path in tmp_path.rglob("*")
+            if path.is_file() and ".git" not in path.parts
+        ),
+    }
+
+    go_symbols = build_go_symbols_artifact(
+        tmp_path,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+    artifact = build_package_graph_artifact(
+        tmp_path,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+        go_symbols_artifact=go_symbols,
+    )
+
+    document = json.loads(artifact.payload.decode("utf-8"))
+    assert document["module"] == {
+        "go_mod_path": "go.mod",
+        "go_version": "1.22",
+        "path": "github.com/acme/root",
+        "toolchain": None,
+    }
+    assert document["modules"] == [
+        {
+            "go_mod_path": "go.mod",
+            "go_version": "1.22",
+            "module_id": "github.com/acme/root",
+            "path": "github.com/acme/root",
+            "root_dir": ".",
+            "toolchain": None,
+        },
+        {
+            "go_mod_path": "modules/shared/go.mod",
+            "go_version": "1.22",
+            "module_id": "github.com/acme/shared",
+            "path": "github.com/acme/shared",
+            "root_dir": "modules/shared",
+            "toolchain": None,
+        },
+    ]
+
+    packages_by_id = {package["package_id"]: package for package in document["packages"]}
+    root_api = packages_by_id["github.com/acme/root/cmd/api#main"]
+    shared_codec = packages_by_id["github.com/acme/shared/codec#codec"]
+    shared_worker = packages_by_id["github.com/acme/shared/cmd/worker#main"]
+
+    assert root_api["module_root"] == "."
+    assert root_api["internal_imports"] == [
+        "github.com/acme/root/internal/core",
+        "github.com/acme/shared/codec",
+    ]
+    assert shared_codec["module_root"] == "modules/shared"
+    assert shared_codec["dir_path"] == "modules/shared/codec"
+    assert shared_worker["is_entrypoint"] is True
+    assert shared_worker["entrypoint_kind"] == "cmd"
+
+    edges_by_key = {
+        (edge["from_package_id"], edge["import_path"]): edge for edge in document["edges"]
+    }
+    api_to_shared = edges_by_key[
+        ("github.com/acme/root/cmd/api#main", "github.com/acme/shared/codec")
+    ]
+    assert api_to_shared["kind"] == "internal"
+    assert api_to_shared["to_package_id"] == "github.com/acme/shared/codec#codec"
+    assert api_to_shared["to_dir_path"] == "modules/shared/codec"
+
+    worker_to_codec = edges_by_key[
+        ("github.com/acme/shared/cmd/worker#main", "github.com/acme/shared/codec")
+    ]
+    assert worker_to_codec["kind"] == "internal"
+    assert worker_to_codec["to_package_id"] == "github.com/acme/shared/codec#codec"
+
+
 def _commit_all(repo: Repo, repo_root: Path) -> None:
     paths = [
         str(path.relative_to(repo_root))

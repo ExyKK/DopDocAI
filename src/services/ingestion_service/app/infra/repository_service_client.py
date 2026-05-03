@@ -17,6 +17,38 @@ class RepositoryServiceClient:
     base_url: str
     timeout_s: float = 10.0
 
+    def get_previous_snapshot(
+        self,
+        repository_id: str,
+        *,
+        branch_name: str,
+        head_commit_sha: str,
+    ) -> dict[str, Any] | None:
+        url = f"{self.base_url.rstrip('/')}/internal/v1/repositories/{repository_id}/snapshots/previous"
+        params = {
+            "branch_name": branch_name,
+            "head_commit_sha": head_commit_sha,
+        }
+        try:
+            response = httpx.get(url, params=params, timeout=self.timeout_s)
+            if response.status_code == 204:
+                return None
+
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_detail(exc.response)
+            raise RepositoryServiceClientError(
+                f"RepositoryService previous snapshot lookup failed: {detail}",
+                operation="previous_snapshot_lookup",
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RepositoryServiceClientError(
+                f"RepositoryService previous snapshot lookup failed: {exc}",
+                operation="previous_snapshot_lookup",
+            ) from exc
+
     def upsert_snapshot(self, repository_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         payload = {
             "branch_name": metadata["branch_name"],
