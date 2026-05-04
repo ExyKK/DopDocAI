@@ -487,15 +487,60 @@
 - Acceptance:
 - `project_model.http_surface` уверенно описывает типичные Go HTTP services и пригоден для docs секций.
 
+### INGEST-014 — Отделить generated docs и API specs от config inventory
+- Priority: `P0`
+- Depends on: `INGEST-003`, `INGEST-006`
+- Goal: не раздувать `config_inventory.json` swagger/openapi/generated artifacts и не смешивать API specs с runtime config.
+- Tasks:
+- расширить file classification для `swagger.json/yaml`, `openapi.json/yaml`, `api-docs`, `docs/swagger`, generated docs;
+- определять OpenAPI/Swagger по content hints: top-level `openapi`, `swagger`, `paths`, `components`, `definitions`;
+- исключить API specs/generated docs из `config_inventory.config_files`;
+- добавить отдельный summary/classification для найденных API specs без полной раскладки всех keys;
+- добавить caps: max config file bytes, max parsed keys per file, max nesting depth, explicit `truncated` metadata.
+- Acceptance:
+- generated swagger/openapi файлы не превращаются в тысячи config keys;
+- реальные config files продолжают попадать в `config_inventory`;
+- downstream может понять, что API spec найден, не загружая его целиком в LLM context.
+
+### INGEST-015 — Сжать `project_model.json` до LLM-friendly summary model
+- Priority: `P0`
+- Depends on: `INGEST-007`, `INGEST-014`
+- Goal: `project_model` должен быть compact overview artifact, а не дублировать все подробные inventories.
+- Tasks:
+- спроектировать совместимый schema-v2 или explicit compact view для `project_model`;
+- убрать из `project_model` полные списки symbols/config keys, оставив counts, top-level summaries, entrypoints, important packages, `http_surface`, integrations и source artifact refs;
+- добавить budget metadata: estimated tokens/bytes, omitted sections, truncation reasons;
+- оставить детальные данные в source artifacts (`go_symbols`, `package_graph`, `config_inventory`, `commit_log`);
+- обновить tests на размер и отсутствие полного дублирования больших inventories.
+- Acceptance:
+- `project_model` для средних repo остается компактным и пригодным как стартовый context для planning;
+- docs generator использует `project_model` как оглавление/manifest, а не как полный источник всех фактов.
+
+### INGEST-016 — Добавить language-neutral monorepo workspace model
+- Priority: `P0`
+- Depends on: `INGEST-003`, `INGEST-005`, `INGEST-015`
+- Goal: корректно описывать monorepo и multi-language repositories без написания tree-sitter парсера под каждый язык.
+- Tasks:
+- выделить workspace units/apps/packages по manifests и lockfiles: `go.mod`, `package.json`, `pnpm-workspace.yaml`, `yarn.lock`, `package-lock.json`, `vite/next/nuxt/svelte/angular` hints, `Dockerfile`, compose, Makefile;
+- классифицировать file ownership: backend/frontend/shared/docs/infra/generated/vendor/test;
+- строить language/framework summary по extensions, manifests, imports/dependencies и key files;
+- связать Go packages с workspace unit, а non-Go units описывать manifest-level metadata без AST parsing;
+- добавить frontend-specific hints: route directories/pages, component directories, API client/generated SDK directories, build/test scripts;
+- отразить model в `project_model.workspace_units[]` или отдельном `workspace_model.json`.
+- Acceptance:
+- repo с Go backend + JS/TS frontend описывается как несколько workspace units;
+- documentation planner может выбрать backend/frontend/infra sections без глубокого парсинга каждого языка;
+- отсутствие parser-а для языка не блокирует useful summary и retrieval indexing.
+
 ## Epic RAG — Vector Index And Retrieval
 
 ### RAG-001 — Выбрать модель хранения в Qdrant
 - Priority: `P0`
-- Depends on: `INGEST-002`
+- Depends on: `INGEST-002`, `INGEST-016`
 - Goal: перейти от коллекции на repo к коллекции на schema/version.
 - Tasks:
 - создать дизайн `code_chunks_v1`;
-- определить payload поля: `snapshot_id`, `repository_id`, `commit_sha`, `file_path`, `language`, `package`, `kind`, `name`, `start_line`, `end_line`, `chunk_kind`, `is_test`;
+- определить payload поля: `snapshot_id`, `repository_id`, `commit_sha`, `file_path`, `language`, `workspace_unit_id`, `package`, `kind`, `name`, `start_line`, `end_line`, `chunk_kind`, `is_test`;
 - определить payload indexes.
 - Acceptance:
 - retrieval возможен через filter по `snapshot_id`;
@@ -696,6 +741,21 @@
 - переводить run в `published` только при успешной проверке.
 - Acceptance:
 - docs run не публикуется как успешный без verification.
+
+### DOCS-009 — Ввести token-budgeted evidence packs
+- Priority: `P0`
+- Depends on: `DOCS-003`, `INGEST-015`, `INGEST-016`
+- Goal: генератор документации не должен отправлять в LLM целые raw artifacts без бюджета и отбора.
+- Tasks:
+- определить per-section evidence budget для `developer_handbook`, `api_reference`, `configuration_and_ops`, `changes_since_previous_snapshot`;
+- собирать evidence pack из compact `project_model`, targeted slices source artifacts и retrieval chunks;
+- добавлять `omitted_sources`, `truncated_sources`, `estimated_tokens`, `selection_reason`;
+- предпочитать structured summaries, а не полные JSON inventories;
+- сохранять evidence pack manifest для отладки и verification.
+- Acceptance:
+- каждый section prompt имеет предсказуемый размер и source provenance;
+- большие artifacts не попадают в LLM context целиком;
+- verification может объяснить, какие источники были использованы или отброшены.
 
 ## Epic GATEWAY — Public API Integration
 
