@@ -8,6 +8,7 @@ from typing import Any
 from git import Repo
 
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.artifacts.source_scope import infer_source_scope, runtime_scope_from_source_scope
 from app.worker.snapshot_resolver import list_head_tree_files
 
 FILE_INVENTORY_ARTIFACT_KIND = "file_inventory"
@@ -52,6 +53,7 @@ def build_file_inventory_artifact(
     repo = Repo(repo_root)
     files: list[dict[str, Any]] = []
     kinds = Counter()
+    source_scopes = Counter()
 
     for entry in list_head_tree_files(repo):
         file_path = repo_root / entry.path
@@ -62,6 +64,7 @@ def build_file_inventory_artifact(
 
         file_kind, flags = _classify_file(entry.path, raw, is_binary)
         kinds[file_kind] += 1
+        source_scopes[flags["source_scope"]] += 1
 
         files.append(
             {
@@ -89,6 +92,7 @@ def build_file_inventory_artifact(
             "readme_files_total": snapshot_metadata["readme_files_total"],
             "bytes_total": snapshot_metadata["bytes_total"],
             "kind_counts": dict(sorted(kinds.items())),
+            "source_scope_counts": dict(sorted(source_scopes.items())),
         },
         "files": files,
     }
@@ -115,7 +119,7 @@ def build_file_inventory_artifact(
     )
 
 
-def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[str, bool]]:
+def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[str, bool | str]]:
     pure_path = PurePosixPath(path)
     lower_path = path.lower()
     lower_name = pure_path.name.lower()
@@ -146,12 +150,24 @@ def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[st
     else:
         kind = "other"
 
+    source_scope = infer_source_scope(
+        path,
+        kind=kind,
+        is_generated=is_generated,
+        is_generated_doc=is_generated_doc,
+        is_api_spec=is_api_spec,
+        is_test=is_test,
+        is_vendor=is_vendor,
+    )
+
     return kind, {
         "is_generated": is_generated,
         "is_generated_doc": is_generated_doc,
         "is_api_spec": is_api_spec,
         "is_test": is_test,
         "is_vendor": is_vendor,
+        "source_scope": source_scope,
+        "runtime_scope": runtime_scope_from_source_scope(source_scope),
     }
 
 

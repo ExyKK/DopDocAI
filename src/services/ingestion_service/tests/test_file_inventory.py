@@ -62,15 +62,27 @@ def test_build_file_inventory_artifact_is_deterministic_and_classifies_files(tmp
         "test": 1,
         "vendor": 1,
     }
+    assert document["summary"]["source_scope_counts"] == {
+        "generated": 2,
+        "runtime": 3,
+        "test": 1,
+        "vendor": 1,
+        "docs": 1,
+    }
 
     by_path = {item["path"]: item for item in files}
     assert by_path["README.md"]["kind"] == "markdown"
+    assert by_path["README.md"]["source_scope"] == "docs"
     assert by_path["cmd/main.go"]["kind"] == "go"
+    assert by_path["cmd/main.go"]["runtime_scope"] is True
     assert by_path["config/app.yaml"]["kind"] == "config"
+    assert by_path["config/app.yaml"]["source_scope"] == "runtime"
     assert by_path["docs/swagger/swagger.json"]["kind"] == "api_spec"
     assert by_path["docs/swagger/swagger.json"]["is_api_spec"] is True
     assert by_path["docs/swagger/swagger.json"]["is_generated_doc"] is True
+    assert by_path["docs/swagger/swagger.json"]["source_scope"] == "generated"
     assert by_path["pkg/service_test.go"]["kind"] == "test"
+    assert by_path["pkg/service_test.go"]["runtime_scope"] is False
     assert by_path["internal/generated.pb.go"]["kind"] == "generated"
     assert by_path["vendor/github.com/pkg/lib.go"]["kind"] == "vendor"
     assert by_path["bin/tool.bin"]["kind"] == "binary"

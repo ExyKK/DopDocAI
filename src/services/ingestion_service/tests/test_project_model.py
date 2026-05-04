@@ -160,6 +160,8 @@ database:
         "http_routes_total": document["summary"]["http_routes_total"],
         "http_surface_detected": document["summary"]["http_surface_detected"],
         "packages_total": document["summary"]["packages_total"],
+        "runtime_config_items_total": document["summary"]["runtime_config_items_total"],
+        "runtime_symbols_total": document["summary"]["runtime_symbols_total"],
         "symbols_total": document["summary"]["symbols_total"],
         "workspace_units_total": document["summary"]["workspace_units_total"],
     } == {
@@ -176,6 +178,8 @@ database:
         "http_routes_total": 1,
         "http_surface_detected": True,
         "packages_total": 2,
+        "runtime_config_items_total": 4,
+        "runtime_symbols_total": 3,
         "symbols_total": 3,
         "workspace_units_total": 1,
     }
@@ -191,6 +195,7 @@ database:
         "markdown": 1,
         "other": 1,
     }
+    assert document["repository_layout"]["source_scope_counts"] == {"docs": 1, "runtime": 4}
     assert document["repository_layout"]["top_level_directories"][0]["path"] == "."
 
     workspace_units = {item["workspace_unit_id"]: item for item in document["workspace_units"]}
@@ -212,6 +217,8 @@ database:
             "import_path": "github.com/acme/project/cmd/api",
             "name": "main",
             "package_id": "github.com/acme/project/cmd/api#main",
+            "runtime_scope": True,
+            "source_scope": "runtime",
             "workspace_unit_id": "backend:root",
         }
     ]
@@ -225,6 +232,7 @@ database:
 
     symbols = {item["qualified_name"]: item for item in document["code_outline"]["important_symbols"]}
     assert symbols["service.Config"]["kind"] == "struct"
+    assert symbols["service.Config"]["source_scope"] == "runtime"
     assert symbols["service.Health"]["kind"] == "function"
 
     env_vars = {item["key"]: item for item in document["configuration"]["env_vars"]}
@@ -234,6 +242,7 @@ database:
         "fields_total": 1,
         "name": "Config",
         "required_fields_total": 1,
+        "source_scope": "runtime",
         "source_file_path": "internal/service/service.go",
     }
     assert "keys" not in document["configuration"]["config_files"][0]
@@ -375,8 +384,76 @@ func Health() {}
             "kind": "dynamic_route_path",
             "line": 23,
             "reason": "route path is not a string literal",
+            "runtime_scope": True,
+            "source_scope": "runtime",
         }
     ]
+
+
+def test_build_project_model_artifact_keeps_test_scope_out_of_primary_config(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / "go.mod",
+        """module github.com/acme/project
+
+go 1.22
+""",
+    )
+    _write_text(
+        tmp_path / "internal" / "service" / "service.go",
+        """package service
+
+import "os"
+
+type Config struct {
+    DatabaseURL string `env:"DATABASE_URL" required:"true"`
+}
+
+func RuntimeHandler() {
+    _ = os.Getenv("DATABASE_URL")
+}
+""",
+    )
+    _write_text(
+        tmp_path / "internal" / "service" / "service_test.go",
+        """package service
+
+import (
+    "flag"
+    "os"
+    "testing"
+)
+
+func TestRuntimeHandler(t *testing.T) {
+    _ = flag.String("debug-test-token", "", "test-only flag")
+    _ = os.Getenv("TEST_ONLY_TOKEN")
+}
+""",
+    )
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+    metadata = _snapshot_metadata(tmp_path, repo)
+
+    document = _build_project_model_document(tmp_path, metadata)
+
+    assert document["summary"]["has_tests"] is True
+    assert document["repository_layout"]["source_scope_counts"] == {"runtime": 2, "test": 1}
+
+    env_vars = {item["key"]: item for item in document["configuration"]["env_vars"]}
+    flags = {item["name"]: item for item in document["configuration"]["flags"]}
+    assert set(env_vars) == {"DATABASE_URL"}
+    assert "TEST_ONLY_TOKEN" not in env_vars
+    assert "debug-test-token" not in flags
+    assert document["configuration"]["non_runtime_env_vars_total"] == 1
+    assert document["configuration"]["non_runtime_flags_total"] == 1
+
+    symbols = document["code_outline"]["important_symbols"]
+    symbol_order = {item["qualified_name"]: index for index, item in enumerate(symbols)}
+    assert symbols[symbol_order["service.RuntimeHandler"]]["source_scope"] == "runtime"
+    assert symbols[symbol_order["service.TestRuntimeHandler"]]["source_scope"] == "test"
+    assert symbol_order["service.RuntimeHandler"] < symbol_order["service.TestRuntimeHandler"]
 
 
 def test_build_project_model_artifact_describes_multilanguage_monorepo_units(

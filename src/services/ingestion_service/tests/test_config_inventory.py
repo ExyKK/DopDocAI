@@ -169,12 +169,27 @@ APP_TOKEN=example-token
         "env_vars_total": 2,
         "flags_total": 3,
         "required_items_total": 4,
+        "runtime_config_file_keys_total": 266,
+        "runtime_config_structs_total": 1,
+        "runtime_configuration_items_total": 272,
+        "runtime_env_vars_total": 2,
+        "runtime_flags_total": 3,
+        "runtime_required_items_total": 4,
+        "source_scope_counts": {
+            "api_specs": {"generated": 1},
+            "config_files": {"runtime": 5},
+            "config_structs": {"runtime": 1},
+            "env_vars": {"runtime": 2},
+            "flags": {"runtime": 3},
+        },
     }
     assert artifact_one.row_count == 272
 
     env_by_key = {item["key"]: item for item in document["env_vars"]}
     assert env_by_key["APP_ENV"]["required"] is False
     assert env_by_key["APP_ENV"]["source"]["symbol_qualified_name"] == "main.main"
+    assert env_by_key["APP_ENV"]["source_scope"] == "runtime"
+    assert env_by_key["APP_ENV"]["runtime_scope"] is True
     assert env_by_key["DATABASE_URL"]["required"] is True
     assert env_by_key["DATABASE_URL"]["required_reason"] == "lookup_env_failure_path"
 
@@ -183,10 +198,12 @@ APP_TOKEN=example-token
     assert flags_by_name["workers"]["default_value"] == 4
     assert flags_by_name["token"]["required"] is True
     assert flags_by_name["token"]["required_reason"] == "usage_mentions_required"
+    assert flags_by_name["token"]["source_scope"] == "runtime"
 
     config_struct = document["config_structs"][0]
     assert config_struct["name"] == "AppConfig"
     assert config_struct["source"]["symbol_qualified_name"] == "main.AppConfig"
+    assert config_struct["source_scope"] == "runtime"
     fields_by_name = {item["name"]: item for item in config_struct["fields"]}
     assert fields_by_name["Host"]["default_value"] == "localhost"
     assert fields_by_name["Host"]["config_keys"] == [
@@ -199,6 +216,7 @@ APP_TOKEN=example-token
 
     config_files_by_path = {item["path"]: item for item in document["config_files"]}
     assert "docs/swagger/swagger.json" not in config_files_by_path
+    assert config_files_by_path["config/app.yaml"]["source_scope"] == "runtime"
 
     yaml_keys = {item["key"]: item for item in config_files_by_path["config/app.yaml"]["keys"]}
     assert yaml_keys["feature.enabled"]["value_kind"] == "bool"
@@ -229,6 +247,8 @@ APP_TOKEN=example-token
             "size_bytes": len((tmp_path / "docs" / "swagger" / "swagger.json").read_bytes()),
             "spec_kind": "swagger",
             "spec_version": "2.0",
+            "runtime_scope": False,
+            "source_scope": "generated",
             "title": "Image Board API",
             "truncated": False,
             "truncation_reason": None,

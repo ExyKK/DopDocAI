@@ -8,6 +8,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.artifacts.source_scope import (
+    SOURCE_SCOPE_GENERATED,
+    SOURCE_SCOPE_INFRA,
+    SOURCE_SCOPE_RUNTIME,
+    SOURCE_SCOPE_VENDOR,
+    runtime_scope_from_source_scope,
+    source_scope_from_record,
+)
 
 CONFIG_INVENTORY_ARTIFACT_KIND = "config_inventory"
 CONFIG_INVENTORY_SCHEMA_VERSION = 1
@@ -64,6 +72,15 @@ def build_config_inventory_artifact(
 
     config_file_keys_total = sum(len(item["keys"]) for item in config_files)
     config_files_truncated_total = sum(1 for item in config_files if item["truncated"])
+    runtime_env_vars = [item for item in env_vars if item["source_scope"] == SOURCE_SCOPE_RUNTIME]
+    runtime_flags = [item for item in flags if item["source_scope"] == SOURCE_SCOPE_RUNTIME]
+    runtime_config_structs = [
+        item for item in config_structs if item["source_scope"] == SOURCE_SCOPE_RUNTIME
+    ]
+    primary_config_files = [
+        item for item in config_files if item["source_scope"] in {SOURCE_SCOPE_RUNTIME, SOURCE_SCOPE_INFRA}
+    ]
+    runtime_config_file_keys_total = sum(len(item["keys"]) for item in primary_config_files)
     required_items_total = (
         sum(1 for item in env_vars if item["required"])
         + sum(1 for item in flags if item["required"])
@@ -74,18 +91,46 @@ def build_config_inventory_artifact(
             if field["required"]
         )
     )
+    runtime_required_items_total = (
+        sum(1 for item in runtime_env_vars if item["required"])
+        + sum(1 for item in runtime_flags if item["required"])
+        + sum(
+            1
+            for config_struct in runtime_config_structs
+            for field in config_struct["fields"]
+            if field["required"]
+        )
+    )
     summary = {
         "env_vars_total": len(env_vars),
+        "runtime_env_vars_total": len(runtime_env_vars),
         "flags_total": len(flags),
+        "runtime_flags_total": len(runtime_flags),
         "config_structs_total": len(config_structs),
+        "runtime_config_structs_total": len(runtime_config_structs),
         "config_files_total": len(config_files),
         "config_file_keys_total": config_file_keys_total,
+        "runtime_config_file_keys_total": runtime_config_file_keys_total,
         "config_files_truncated_total": config_files_truncated_total,
         "api_specs_total": len(api_specs),
         "api_spec_kind_counts": dict(sorted(Counter(item["spec_kind"] for item in api_specs).items())),
         "configuration_items_total": len(env_vars) + len(flags) + len(config_structs) + config_file_keys_total,
+        "runtime_configuration_items_total": (
+            len(runtime_env_vars)
+            + len(runtime_flags)
+            + len(runtime_config_structs)
+            + runtime_config_file_keys_total
+        ),
         "required_items_total": required_items_total,
+        "runtime_required_items_total": runtime_required_items_total,
         "config_file_format_counts": dict(sorted(Counter(item["format"] for item in config_files).items())),
+        "source_scope_counts": {
+            "env_vars": dict(sorted(Counter(item["source_scope"] for item in env_vars).items())),
+            "flags": dict(sorted(Counter(item["source_scope"] for item in flags).items())),
+            "config_structs": dict(sorted(Counter(item["source_scope"] for item in config_structs).items())),
+            "config_files": dict(sorted(Counter(item["source_scope"] for item in config_files).items())),
+            "api_specs": dict(sorted(Counter(item["source_scope"] for item in api_specs).items())),
+        },
         "config_file_parse_limits": {
             "max_file_bytes": _MAX_CONFIG_FILE_BYTES,
             "max_keys_per_file": _MAX_CONFIG_KEYS_PER_FILE,
@@ -140,6 +185,10 @@ def _load_artifact_document(artifact: BuiltAnalysisArtifact | dict[str, Any]) ->
 
 def _build_go_source_index(go_symbols: dict[str, Any]) -> dict[str, Any]:
     packages_by_file = {item["path"]: item.get("package") for item in go_symbols.get("files", [])}
+    source_scopes_by_file = {
+        item["path"]: source_scope_from_record(item)
+        for item in go_symbols.get("files", [])
+    }
     symbols_by_file: dict[str, list[dict[str, Any]]] = {}
     for symbol in go_symbols.get("symbols", []):
         symbols_by_file.setdefault(symbol["file_path"], []).append(symbol)
@@ -147,7 +196,11 @@ def _build_go_source_index(go_symbols: dict[str, Any]) -> dict[str, Any]:
     for symbols in symbols_by_file.values():
         symbols.sort(key=lambda item: (item["start_line"], item["end_line"], item["qualified_name"]))
 
-    return {"packages_by_file": packages_by_file, "symbols_by_file": symbols_by_file}
+    return {
+        "packages_by_file": packages_by_file,
+        "source_scopes_by_file": source_scopes_by_file,
+        "symbols_by_file": symbols_by_file,
+    }
 
 
 def _scan_go_sources(
@@ -160,7 +213,8 @@ def _scan_go_sources(
     config_structs: list[dict[str, Any]] = []
 
     for file_record in go_symbols.get("files", []):
-        if file_record.get("is_vendor") or file_record.get("is_generated"):
+        source_scope = source_scope_from_record(file_record)
+        if source_scope in {SOURCE_SCOPE_VENDOR, SOURCE_SCOPE_GENERATED}:
             continue
 
         path = file_record["path"]
@@ -189,15 +243,19 @@ def _extract_env_vars(path: str, lines: list[str], source_index: dict[str, Any])
                 continue
 
             required, required_reason = _required_env_hint(lines, line_index, match.group(1), key)
+            source = _source_ref(path, line_index + 1, source_index)
             findings.append(
-                {
-                    "key": key,
-                    "accessor": f"os.{match.group(1)}",
-                    "default_value": None,
-                    "required": required,
-                    "required_reason": required_reason,
-                    "source": _source_ref(path, line_index + 1, source_index),
-                }
+                _with_finding_scope(
+                    {
+                        "key": key,
+                        "accessor": f"os.{match.group(1)}",
+                        "default_value": None,
+                        "required": required,
+                        "required_reason": required_reason,
+                        "source": source,
+                    },
+                    source,
+                )
             )
 
     return findings
@@ -214,7 +272,9 @@ def _extract_flags(path: str, lines: list[str], source_index: dict[str, Any]) ->
             if parsed is None:
                 continue
 
-            parsed["source"] = _source_ref(path, line_index + 1, source_index)
+            source = _source_ref(path, line_index + 1, source_index)
+            parsed["source"] = source
+            parsed = _with_finding_scope(parsed, source)
             findings.append(parsed)
 
     return findings
@@ -277,12 +337,16 @@ def _extract_config_structs(path: str, lines: list[str], source_index: dict[str,
         block_lines, end_index = _collect_struct_block(lines, index)
         fields = _extract_struct_fields(block_lines, start_line)
         if fields:
+            source = _source_ref(path, start_line, source_index, end_line=end_index + 1)
             findings.append(
-                {
-                    "name": name,
-                    "fields": fields,
-                    "source": _source_ref(path, start_line, source_index, end_line=end_index + 1),
-                }
+                _with_finding_scope(
+                    {
+                        "name": name,
+                        "fields": fields,
+                        "source": source,
+                    },
+                    source,
+                )
             )
 
         index = end_index + 1
@@ -368,6 +432,8 @@ def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> tuple
             continue
 
         path = file_record["path"]
+        source_scope = source_scope_from_record(file_record)
+        runtime_scope = runtime_scope_from_source_scope(source_scope)
         if _is_vendor_path(path):
             continue
 
@@ -385,6 +451,8 @@ def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> tuple
                     file_record,
                     source="file_classification",
                     truncated=file_truncated,
+                    source_scope=source_scope,
+                    runtime_scope=runtime_scope,
                 )
             )
             continue
@@ -406,6 +474,8 @@ def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> tuple
                     file_record,
                     source="content_hints",
                     truncated=file_truncated,
+                    source_scope=source_scope,
+                    runtime_scope=runtime_scope,
                 )
             )
             continue
@@ -425,6 +495,8 @@ def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> tuple
                 "truncation_reason": "max_file_bytes_exceeded" if file_truncated else truncation_reason,
                 "size_bytes": file_record.get("size_bytes", 0),
                 "line_count": file_record.get("line_count", 0),
+                "source_scope": source_scope,
+                "runtime_scope": runtime_scope,
             }
         )
 
@@ -554,6 +626,8 @@ def _summarize_api_spec(
     *,
     source: str,
     truncated: bool,
+    source_scope: str,
+    runtime_scope: bool,
 ) -> dict[str, Any]:
     summary = {
         "path": path,
@@ -570,6 +644,8 @@ def _summarize_api_spec(
         "truncation_reason": "max_file_bytes_exceeded" if truncated else None,
         "size_bytes": file_record.get("size_bytes", 0),
         "line_count": file_record.get("line_count", 0),
+        "source_scope": source_scope,
+        "runtime_scope": runtime_scope,
     }
 
     try:
@@ -898,6 +974,7 @@ def _source_ref(
     end_line: int | None = None,
 ) -> dict[str, Any]:
     symbol = _symbol_at(path, line, source_index)
+    source_scope = source_index["source_scopes_by_file"].get(path, SOURCE_SCOPE_RUNTIME)
     return {
         "file_path": path,
         "start_line": line,
@@ -905,6 +982,17 @@ def _source_ref(
         "package": source_index["packages_by_file"].get(path),
         "symbol_id": symbol.get("symbol_id") if symbol else None,
         "symbol_qualified_name": symbol.get("qualified_name") if symbol else None,
+        "source_scope": source_scope,
+        "runtime_scope": runtime_scope_from_source_scope(source_scope),
+    }
+
+
+def _with_finding_scope(item: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    source_scope = source.get("source_scope", SOURCE_SCOPE_RUNTIME)
+    return {
+        **item,
+        "source_scope": source_scope,
+        "runtime_scope": runtime_scope_from_source_scope(source_scope),
     }
 
 

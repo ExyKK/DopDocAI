@@ -6,6 +6,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.artifacts.source_scope import (
+    SOURCE_SCOPE_INFRA,
+    SOURCE_SCOPE_RUNTIME,
+    runtime_scope_from_source_scope,
+    source_scope_from_record,
+)
 
 PROJECT_MODEL_ARTIFACT_KIND = "project_model"
 PROJECT_MODEL_SCHEMA_VERSION = 2
@@ -110,8 +116,13 @@ def build_project_model_artifact(
         "workspace_units_total": len(workspace_units),
         "packages_total": package_graph.get("summary", {}).get("packages_total", 0),
         "symbols_total": go_symbols.get("summary", {}).get("symbols_total", 0),
+        "runtime_symbols_total": go_symbols.get("summary", {}).get("runtime_symbols_total", 0),
         "entrypoint_packages_total": package_graph.get("summary", {}).get("entrypoint_packages_total", 0),
         "config_items_total": config_inventory.get("summary", {}).get("configuration_items_total", 0),
+        "runtime_config_items_total": config_inventory.get("summary", {}).get(
+            "runtime_configuration_items_total",
+            config_inventory.get("summary", {}).get("configuration_items_total", 0),
+        ),
         "config_files_total": config_inventory.get("summary", {}).get("config_files_total", 0),
         "api_specs_total": config_inventory.get("summary", {}).get("api_specs_total", 0),
         "external_integrations_total": len(external_integrations),
@@ -186,6 +197,7 @@ def _load_artifact_document(artifact: BuiltAnalysisArtifact | dict[str, Any]) ->
 def _build_repository_layout(file_inventory: dict[str, Any]) -> dict[str, Any]:
     files = file_inventory.get("files", [])
     kind_counts = Counter(item.get("kind", "other") for item in files)
+    source_scope_counts = Counter(source_scope_from_record(item) for item in files)
     top_level: defaultdict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "path": "",
@@ -233,6 +245,7 @@ def _build_repository_layout(file_inventory: dict[str, Any]) -> dict[str, Any]:
         "files_total": len(files),
         "bytes_total": file_inventory.get("summary", {}).get("bytes_total", 0),
         "kind_counts": dict(sorted(kind_counts.items())),
+        "source_scope_counts": dict(sorted(source_scope_counts.items())),
         "top_level_directories": directories,
         "key_files": key_files,
         "has_tests": kind_counts.get("test", 0) > 0 or any(item.get("is_test") for item in files),
@@ -257,8 +270,11 @@ def _build_go_model(
                 entrypoint.get("dir_path", "."),
                 workspace_unit_lookup,
             ),
+            "source_scope": entrypoint.get("source_scope", SOURCE_SCOPE_RUNTIME),
+            "runtime_scope": entrypoint.get("runtime_scope", True),
         }
         for entrypoint in package_graph.get("entrypoints", [])
+        if entrypoint.get("runtime_scope", True)
     ]
     entrypoints.sort(key=lambda item: (item["dir_path"], item["package_id"]))
 
@@ -276,6 +292,7 @@ def _important_packages(packages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ranked = sorted(
         packages,
         key=lambda package: (
+            not package.get("runtime_scope", package.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME),
             not package.get("is_entrypoint", False),
             not package.get("is_command", False),
             -int(package.get("symbols_total", 0)),
@@ -303,6 +320,10 @@ def _compact_important_package(
         "module_root": package.get("module_root"),
         "files_total": package.get("files_total", 0),
         "symbols_total": package.get("symbols_total", 0),
+        "runtime_symbols_total": package.get("runtime_symbols_total", package.get("symbols_total", 0)),
+        "source_scope": package.get("source_scope", SOURCE_SCOPE_RUNTIME),
+        "runtime_scope": package.get("runtime_scope", True),
+        "file_source_scope_counts": package.get("file_source_scope_counts", {}),
         "is_command": package.get("is_command", False),
         "is_entrypoint": package.get("is_entrypoint", False),
         "entrypoint_kind": package.get("entrypoint_kind"),
@@ -340,9 +361,18 @@ def _go_dependency_summary(package_graph: dict[str, Any]) -> dict[str, Any]:
     standard = Counter()
     internal = Counter()
     for package in package_graph.get("packages", []):
-        external.update(package.get("external_imports", []))
-        standard.update(package.get("standard_library_imports", []))
-        internal.update(package.get("internal_imports", []))
+        if not package.get("runtime_scope", package.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME):
+            continue
+
+        external.update(_package_scoped_imports(package, "runtime_external_imports", "external_imports"))
+        standard.update(
+            _package_scoped_imports(
+                package,
+                "runtime_standard_library_imports",
+                "standard_library_imports",
+            )
+        )
+        internal.update(_package_scoped_imports(package, "runtime_internal_imports", "internal_imports"))
 
     return {
         "external_imports_top": _counter_top(external),
@@ -358,6 +388,14 @@ def _counter_top(counter: Counter[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _package_scoped_imports(
+    package: dict[str, Any],
+    scoped_key: str,
+    fallback_key: str,
+) -> list[str]:
+    return package[scoped_key] if scoped_key in package else package.get(fallback_key, [])
+
+
 def _build_code_outline(
     go_symbols: dict[str, Any],
     important_packages: list[dict[str, Any]],
@@ -366,6 +404,7 @@ def _build_code_outline(
     ranked_symbols = sorted(
         go_symbols.get("symbols", []),
         key=lambda symbol: (
+            not symbol.get("runtime_scope", source_scope_from_record(symbol) == SOURCE_SCOPE_RUNTIME),
             not symbol.get("exported", False),
             PurePosixPath(symbol.get("file_path", "")).parent.as_posix() not in important_package_dirs,
             symbol.get("file_path", ""),
@@ -375,12 +414,14 @@ def _build_code_outline(
     )
     important_symbols = [_compact_symbol(symbol) for symbol in ranked_symbols[:_MAX_IMPORTANT_SYMBOLS]]
     symbols_total = go_symbols.get("summary", {}).get("symbols_total", len(go_symbols.get("symbols", [])))
+    source_scope_counts = Counter(source_scope_from_record(symbol) for symbol in go_symbols.get("symbols", []))
 
     return {
         "summary": {
             **go_symbols.get("summary", {}),
             "important_symbols_total": len(important_symbols),
             "important_symbols_omitted": max(0, symbols_total - len(important_symbols)),
+            "source_scope_counts": dict(sorted(source_scope_counts.items())),
         },
         "important_symbols": important_symbols,
     }
@@ -398,6 +439,8 @@ def _compact_symbol(symbol: dict[str, Any]) -> dict[str, Any]:
         "end_line": symbol["end_line"],
         "signature": symbol.get("signature"),
         "exported": symbol.get("exported", False),
+        "source_scope": source_scope_from_record(symbol),
+        "runtime_scope": symbol.get("runtime_scope", runtime_scope_from_source_scope(source_scope_from_record(symbol))),
     }
 
 
@@ -406,16 +449,29 @@ def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, An
     flags = config_inventory.get("flags", [])
     config_structs = config_inventory.get("config_structs", [])
     config_files = config_inventory.get("config_files", [])
+    primary_config_scopes = {SOURCE_SCOPE_RUNTIME, SOURCE_SCOPE_INFRA}
+    runtime_env_vars = [item for item in env_vars if item.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME]
+    runtime_flags = [item for item in flags if item.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME]
+    runtime_config_structs = [
+        item for item in config_structs if item.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME
+    ]
+    primary_config_files = [
+        item for item in config_files if item.get("source_scope", SOURCE_SCOPE_RUNTIME) in primary_config_scopes
+    ]
     return {
         "summary": config_inventory.get("summary", {}),
-        "env_vars": _sample_config_items(env_vars, key="key"),
-        "env_vars_omitted": max(0, len(env_vars) - _MAX_CONFIG_ITEMS),
-        "flags": _sample_config_items(flags, key="name"),
-        "flags_omitted": max(0, len(flags) - _MAX_CONFIG_ITEMS),
-        "config_structs": _compact_config_structs(config_structs),
-        "config_structs_omitted": max(0, len(config_structs) - _MAX_CONFIG_ITEMS),
-        "config_files": _compact_config_files(config_files),
-        "config_files_omitted": max(0, len(config_files) - _MAX_CONFIG_ITEMS),
+        "env_vars": _sample_config_items(runtime_env_vars, key="key"),
+        "env_vars_omitted": max(0, len(runtime_env_vars) - _MAX_CONFIG_ITEMS),
+        "non_runtime_env_vars_total": max(0, len(env_vars) - len(runtime_env_vars)),
+        "flags": _sample_config_items(runtime_flags, key="name"),
+        "flags_omitted": max(0, len(runtime_flags) - _MAX_CONFIG_ITEMS),
+        "non_runtime_flags_total": max(0, len(flags) - len(runtime_flags)),
+        "config_structs": _compact_config_structs(runtime_config_structs),
+        "config_structs_omitted": max(0, len(runtime_config_structs) - _MAX_CONFIG_ITEMS),
+        "non_runtime_config_structs_total": max(0, len(config_structs) - len(runtime_config_structs)),
+        "config_files": _compact_config_files(primary_config_files),
+        "config_files_omitted": max(0, len(primary_config_files) - _MAX_CONFIG_ITEMS),
+        "non_primary_config_files_total": max(0, len(config_files) - len(primary_config_files)),
         "api_specs": config_inventory.get("api_specs", []),
     }
 
@@ -428,6 +484,7 @@ def _sample_config_items(items: list[dict[str, Any]], *, key: str) -> list[dict[
             key: item.get(key),
             "required": item.get("required", False),
             "source_file_path": _source_file_path(item),
+            "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
         }
         if "default_value" in item:
             compact_item["default_value"] = item.get("default_value")
@@ -449,6 +506,7 @@ def _compact_config_structs(config_structs: list[dict[str, Any]]) -> list[dict[s
                 "required_fields_total": sum(1 for field in fields if field.get("required")),
                 "config_keys_total": sum(len(field.get("config_keys", [])) for field in fields),
                 "source_file_path": _source_file_path(item),
+                "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
             }
         )
 
@@ -468,6 +526,7 @@ def _compact_config_files(config_files: list[dict[str, Any]]) -> list[dict[str, 
                 "truncation_reason": item.get("truncation_reason"),
                 "size_bytes": item.get("size_bytes", 0),
                 "line_count": item.get("line_count", 0),
+                "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
             }
         )
 
@@ -990,15 +1049,16 @@ def _infra_frameworks(paths: list[str]) -> list[str]:
 def _file_owner(file_record: dict[str, Any]) -> str:
     path = file_record["path"]
     kind = file_record.get("kind")
-    if file_record.get("is_vendor") or kind == "vendor":
+    source_scope = source_scope_from_record(file_record)
+    if source_scope == "vendor":
         return "vendor"
-    if file_record.get("is_generated") or file_record.get("is_generated_doc") or kind in {"generated", "api_spec"}:
+    if source_scope == "generated":
         return "generated"
-    if file_record.get("is_test") or kind == "test":
+    if source_scope == "test":
         return "test"
-    if _is_infra_file(path):
+    if source_scope == "infra" or _is_infra_file(path):
         return "infra"
-    if path.startswith("docs/") or kind == "markdown":
+    if source_scope == "docs" or path.startswith("docs/") or kind == "markdown":
         return "docs"
     if path.endswith(".go"):
         return "backend"
@@ -1136,6 +1196,9 @@ def _detect_external_integrations(
 ) -> list[dict[str, Any]]:
     candidates: dict[tuple[str, str], dict[str, Any]] = {}
     for edge in package_graph.get("edges", []):
+        if not edge.get("runtime_scope", True):
+            continue
+
         import_path = edge["import_path"]
         if import_path == "net/http":
             continue
@@ -1158,6 +1221,9 @@ def _detect_external_integrations(
         item["files"].update(edge.get("files", []))
 
     for env_var in config_inventory.get("env_vars", []):
+        if env_var.get("source_scope", SOURCE_SCOPE_RUNTIME) != SOURCE_SCOPE_RUNTIME:
+            continue
+
         category = _integration_category(env_var["key"])
         if category is None:
             continue
@@ -1190,15 +1256,26 @@ def _detect_http_surface(
     go_symbols: dict[str, Any],
 ) -> dict[str, Any]:
     http_imports: dict[str, set[str]] = defaultdict(set)
+    http_file_scopes: dict[str, str] = {}
     file_packages = _build_file_package_lookup(package_graph)
     symbol_lookup = _build_symbol_lookup(go_symbols)
 
-    for package in package_graph.get("packages", []):
-        for import_path in package.get("standard_library_imports", []) + package.get("external_imports", []):
-            framework = _HTTP_IMPORTS.get(import_path)
-            if framework is not None:
-                for file_path in package.get("files", []):
-                    http_imports[file_path].add(framework)
+    for edge in package_graph.get("edges", []):
+        framework = _HTTP_IMPORTS.get(edge.get("import_path"))
+        if framework is None:
+            continue
+
+        for file_ref in edge.get("file_source_scopes", []):
+            source_scope = file_ref.get("source_scope", SOURCE_SCOPE_RUNTIME)
+            if source_scope != SOURCE_SCOPE_RUNTIME:
+                continue
+
+            file_path = file_ref.get("path")
+            if not file_path:
+                continue
+
+            http_imports[file_path].add(framework)
+            http_file_scopes[file_path] = source_scope
 
     routes: list[dict[str, Any]] = []
     unsupported_patterns: list[dict[str, Any]] = []
@@ -1215,6 +1292,7 @@ def _detect_http_surface(
             frameworks=sorted(frameworks),
             package_ref=package_ref,
             symbol_lookup=symbol_lookup,
+            source_scope=http_file_scopes.get(file_path, SOURCE_SCOPE_RUNTIME),
         )
         routes.extend(extracted["routes"])
         unsupported_patterns.extend(extracted["unsupported_patterns"])
@@ -1243,6 +1321,7 @@ def _extract_http_routes_from_file(
     frameworks: list[str],
     package_ref: dict[str, Any] | None,
     symbol_lookup: dict[str, Any],
+    source_scope: str,
 ) -> dict[str, list[dict[str, Any]]]:
     routes: list[dict[str, Any]] = []
     unsupported_patterns: list[dict[str, Any]] = []
@@ -1257,6 +1336,7 @@ def _extract_http_routes_from_file(
             "package": package_ref,
             "symbol_lookup": symbol_lookup,
             "receiver_prefixes": {**receiver_prefixes, **statement_prefixes},
+            "source_scope": source_scope,
         }
 
         routes.extend(_extract_method_routes(statement, route_context))
@@ -1463,6 +1543,8 @@ def _extract_unsupported_http_patterns(
                 "line": statement["line"] + text[: match.start()].count("\n"),
                 "expression": _compact_expression(args[0]),
                 "reason": "route path is not a string literal",
+                "source_scope": context["source_scope"],
+                "runtime_scope": runtime_scope_from_source_scope(context["source_scope"]),
             }
         )
 
@@ -1479,6 +1561,8 @@ def _extract_unsupported_http_patterns(
                 "line": statement["line"] + text[: match.start()].count("\n"),
                 "expression": _compact_expression(args[0]),
                 "reason": "route group prefix is not a string literal",
+                "source_scope": context["source_scope"],
+                "runtime_scope": runtime_scope_from_source_scope(context["source_scope"]),
             }
         )
 
@@ -1506,6 +1590,8 @@ def _route_record(
         "package": package_ref,
         "handler": handler,
         "confidence": "high" if _literal_text(path) else "medium",
+        "source_scope": context["source_scope"],
+        "runtime_scope": runtime_scope_from_source_scope(context["source_scope"]),
     }
 
 
@@ -1641,12 +1727,14 @@ def _build_file_package_lookup(package_graph: dict[str, Any]) -> dict[str, list[
             "name": package["name"],
             "dir_path": package["dir_path"],
             "import_path": package.get("import_path"),
+            "source_scope": package.get("source_scope", SOURCE_SCOPE_RUNTIME),
+            "runtime_scope": package.get("runtime_scope", True),
         }
         for file_path in package.get("files", []):
             lookup[file_path].append(ref)
 
     for refs in lookup.values():
-        refs.sort(key=lambda item: (item["name"].endswith("_test"), item["package_id"]))
+        refs.sort(key=lambda item: (not item.get("runtime_scope", True), item["name"].endswith("_test"), item["package_id"]))
 
     return lookup
 

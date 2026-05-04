@@ -114,7 +114,20 @@ func Vendor() {}
             "struct": 2,
             "type": 1,
         },
+        "file_source_scope_counts": {
+            "generated": 1,
+            "runtime": 1,
+            "test": 1,
+            "vendor": 1,
+        },
         "packages_total": 2,
+        "runtime_symbols_total": 5,
+        "symbol_source_scope_counts": {
+            "generated": 1,
+            "runtime": 5,
+            "test": 1,
+            "vendor": 1,
+        },
         "symbols_total": 8,
     }
 
@@ -122,6 +135,8 @@ func Vendor() {}
     service_file = files_by_path["internal/service.go"]
     assert service_file["package"] == "service"
     assert service_file["parse_error"] is False
+    assert service_file["source_scope"] == "runtime"
+    assert service_file["runtime_scope"] is True
     assert service_file["symbols_total"] == 5
     assert service_file["imports"] == [
         {"is_blank": False, "is_dot": False, "name": None, "path": "context"},
@@ -162,14 +177,19 @@ func Vendor() {}
     generated = symbols_by_name[("service.Generated", "internal/generated.pb.go")]
     assert generated["kind"] == "struct"
     assert generated["is_generated"] is True
+    assert generated["source_scope"] == "generated"
+    assert generated["runtime_scope"] is False
 
     test_symbol = symbols_by_name[("service.TestHandle", "pkg/service_test.go")]
     assert test_symbol["kind"] == "function"
     assert test_symbol["is_test"] is True
+    assert test_symbol["source_scope"] == "test"
+    assert test_symbol["runtime_scope"] is False
 
     vendor_symbol = symbols_by_name[("lib.Vendor", "vendor/example/lib.go")]
     assert vendor_symbol["kind"] == "function"
     assert vendor_symbol["is_vendor"] is True
+    assert vendor_symbol["source_scope"] == "vendor"
 
 
 def _write_text(path: Path, content: str) -> None:

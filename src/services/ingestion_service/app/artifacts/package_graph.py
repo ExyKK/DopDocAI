@@ -9,6 +9,14 @@ from typing import Any
 from git import Repo
 
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.artifacts.source_scope import (
+    SOURCE_SCOPE_GENERATED,
+    SOURCE_SCOPE_RUNTIME,
+    SOURCE_SCOPE_TEST,
+    SOURCE_SCOPE_VENDOR,
+    runtime_scope_from_source_scope,
+    source_scope_from_record,
+)
 from app.worker.snapshot_resolver import list_head_tree_files
 
 PACKAGE_GRAPH_ARTIFACT_KIND = "package_graph"
@@ -51,12 +59,21 @@ def build_package_graph_artifact(
             "name": package["name"],
             "entrypoint_kind": package["entrypoint_kind"],
             "files": package["files"],
+            "source_scope": package["source_scope"],
+            "runtime_scope": package["runtime_scope"],
         }
         for package in packages
-        if package["is_entrypoint"]
+        if package["is_entrypoint"] and package["runtime_scope"]
     ]
 
     edge_kind_counts = Counter(edge["kind"] for edge in edges)
+    package_source_scope_counts = Counter(package["source_scope"] for package in packages)
+    file_source_scope_counts = Counter(
+        scope
+        for package in packages
+        for scope, count in package.get("file_source_scope_counts", {}).items()
+        for _ in range(count)
+    )
     summary = {
         "go_files_total": go_symbols.get("summary", {}).get(
             "go_files_total",
@@ -74,6 +91,9 @@ def build_package_graph_artifact(
             len(builder["files"]) for builder in package_builders.values()
         ),
         "edge_kind_counts": dict(sorted(edge_kind_counts.items())),
+        "package_source_scope_counts": dict(sorted(package_source_scope_counts.items())),
+        "file_source_scope_counts": dict(sorted(file_source_scope_counts.items())),
+        "runtime_packages_total": package_source_scope_counts.get(SOURCE_SCOPE_RUNTIME, 0),
     }
 
     document = {
@@ -138,6 +158,7 @@ def _group_go_files_by_package(
             continue
 
         path = _normalize_path(file_record["path"])
+        source_scope = source_scope_from_record(file_record)
         dir_path = _dir_path(path)
         module = _module_for_dir(dir_path, modules)
         key = (module.root_dir, dir_path, package_name)
@@ -158,6 +179,8 @@ def _group_go_files_by_package(
                 "is_generated": bool(file_record.get("is_generated")),
                 "is_test": bool(file_record.get("is_test")),
                 "is_vendor": bool(file_record.get("is_vendor")),
+                "source_scope": source_scope,
+                "runtime_scope": runtime_scope_from_source_scope(source_scope),
                 "parse_error": bool(file_record.get("parse_error")),
             }
         )
@@ -174,6 +197,7 @@ def _group_go_files_by_package(
                     "is_dot": bool(import_record.get("is_dot")),
                     "is_blank": bool(import_record.get("is_blank")),
                     "file_path": path,
+                    "source_scope": source_scope,
                 }
             )
 
@@ -188,6 +212,8 @@ def _build_packages(
     for (_, dir_path, package_name), builder in sorted(package_builders.items()):
         module = builder["module"]
         files = sorted(builder["files"], key=lambda item: item["path"])
+        source_scope_counts = Counter(file_record["source_scope"] for file_record in files)
+        source_scope = _package_source_scope(package_name, dir_path, source_scope_counts)
         import_path = _package_import_path(dir_path, module)
         entrypoint_kind = _entrypoint_kind(dir_path, package_name, module)
         package = {
@@ -201,7 +227,41 @@ def _build_packages(
             "files": [file_record["path"] for file_record in files],
             "files_total": len(files),
             "symbols_total": sum(file_record["symbols_total"] for file_record in files),
+            "source_scope": source_scope,
+            "runtime_scope": runtime_scope_from_source_scope(source_scope),
+            "file_source_scope_counts": dict(sorted(source_scope_counts.items())),
+            "runtime_files_total": source_scope_counts.get(SOURCE_SCOPE_RUNTIME, 0),
+            "test_files_total": source_scope_counts.get(SOURCE_SCOPE_TEST, 0),
+            "generated_files_total": source_scope_counts.get(SOURCE_SCOPE_GENERATED, 0),
+            "runtime_symbols_total": sum(
+                file_record["symbols_total"]
+                for file_record in files
+                if file_record["source_scope"] == SOURCE_SCOPE_RUNTIME
+            ),
+            "test_symbols_total": sum(
+                file_record["symbols_total"]
+                for file_record in files
+                if file_record["source_scope"] == SOURCE_SCOPE_TEST
+            ),
+            "generated_symbols_total": sum(
+                file_record["symbols_total"]
+                for file_record in files
+                if file_record["source_scope"] == SOURCE_SCOPE_GENERATED
+            ),
             "imports": [],
+            "imports_by_source_scope": {},
+            "runtime_imports": [],
+            "test_imports": [],
+            "generated_imports": [],
+            "runtime_internal_imports": [],
+            "runtime_standard_library_imports": [],
+            "runtime_external_imports": [],
+            "test_internal_imports": [],
+            "test_standard_library_imports": [],
+            "test_external_imports": [],
+            "generated_internal_imports": [],
+            "generated_standard_library_imports": [],
+            "generated_external_imports": [],
             "internal_imports": [],
             "standard_library_imports": [],
             "external_imports": [],
@@ -249,6 +309,23 @@ def _build_package_lookup(packages: list[dict[str, Any]]) -> dict[str, dict[str,
     }
 
 
+def _package_source_scope(
+    package_name: str,
+    dir_path: str,
+    source_scope_counts: Counter[str],
+) -> str:
+    if source_scope_counts.get(SOURCE_SCOPE_VENDOR, 0) > 0 or _is_vendor_dir(dir_path):
+        return SOURCE_SCOPE_VENDOR
+    if source_scope_counts.get(SOURCE_SCOPE_RUNTIME, 0) > 0 and not package_name.endswith("_test"):
+        return SOURCE_SCOPE_RUNTIME
+    if source_scope_counts.get(SOURCE_SCOPE_TEST, 0) > 0 or package_name.endswith("_test"):
+        return SOURCE_SCOPE_TEST
+    if source_scope_counts.get(SOURCE_SCOPE_GENERATED, 0) > 0:
+        return SOURCE_SCOPE_GENERATED
+
+    return SOURCE_SCOPE_RUNTIME
+
+
 def _build_edges(
     package_builders: dict[tuple[str, str, str], dict[str, Any]],
     packages: list[dict[str, Any]],
@@ -259,7 +336,7 @@ def _build_edges(
         (package["module_root"], package["dir_path"], package["name"]): package
         for package in packages
     }
-    imports_by_package: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    imports_by_package: dict[str, dict[str, list[str]]] = {}
     edges: list[dict[str, Any]] = []
 
     for key, builder in sorted(package_builders.items()):
@@ -270,6 +347,7 @@ def _build_edges(
 
         package_imports_by_kind: defaultdict[str, list[str]] = defaultdict(list)
         for import_path, import_records in sorted(grouped_imports.items()):
+            import_source_scope_counts = Counter(record["source_scope"] for record in import_records)
             target = _resolve_import(
                 import_path,
                 from_dir_path=package["dir_path"],
@@ -286,6 +364,17 @@ def _build_edges(
                 "to_import_path": target["to_import_path"],
                 "to_dir_path": target["to_dir_path"],
                 "files": sorted({record["file_path"] for record in import_records}),
+                "file_source_scopes": [
+                    {"path": file_path, "source_scope": source_scope}
+                    for file_path, source_scope in sorted(
+                        {
+                            (record["file_path"], record["source_scope"])
+                            for record in import_records
+                        }
+                    )
+                ],
+                "source_scope_counts": dict(sorted(import_source_scope_counts.items())),
+                "runtime_scope": import_source_scope_counts.get(SOURCE_SCOPE_RUNTIME, 0) > 0,
                 "import_count": len(import_records),
                 "import_names": sorted(
                     {record["name"] for record in import_records if record.get("name") is not None}
@@ -295,6 +384,9 @@ def _build_edges(
             }
             edges.append(edge)
             package_imports_by_kind[target["kind"]].append(import_path)
+            for source_scope in import_source_scope_counts:
+                package_imports_by_kind[f"{source_scope}:{target['kind']}"].append(import_path)
+                package_imports_by_kind[f"{source_scope}:all"].append(import_path)
 
         imports_by_package[package["package_id"]] = package_imports_by_kind
 
@@ -316,11 +408,43 @@ def _build_edges(
             }
         )
         package["imports"] = all_imports
+        package["imports_by_source_scope"] = {
+            source_scope: sorted(imports_by_kind.get(f"{source_scope}:all", []))
+            for source_scope in sorted(
+                {
+                    key.split(":", 1)[0]
+                    for key in imports_by_kind
+                    if ":" in key
+                }
+            )
+        }
+        package["runtime_imports"] = package["imports_by_source_scope"].get(SOURCE_SCOPE_RUNTIME, [])
+        package["test_imports"] = package["imports_by_source_scope"].get(SOURCE_SCOPE_TEST, [])
+        package["generated_imports"] = package["imports_by_source_scope"].get(SOURCE_SCOPE_GENERATED, [])
         package["internal_imports"] = sorted(imports_by_kind.get("internal", []))
         package["standard_library_imports"] = sorted(imports_by_kind.get("standard_library", []))
         package["external_imports"] = sorted(imports_by_kind.get("external", []))
         package["vendor_imports"] = sorted(imports_by_kind.get("vendor", []))
         package["cgo_imports"] = sorted(imports_by_kind.get("cgo", []))
+        package["runtime_internal_imports"] = sorted(imports_by_kind.get(f"{SOURCE_SCOPE_RUNTIME}:internal", []))
+        package["runtime_standard_library_imports"] = sorted(
+            imports_by_kind.get(f"{SOURCE_SCOPE_RUNTIME}:standard_library", [])
+        )
+        package["runtime_external_imports"] = sorted(imports_by_kind.get(f"{SOURCE_SCOPE_RUNTIME}:external", []))
+        package["test_internal_imports"] = sorted(imports_by_kind.get(f"{SOURCE_SCOPE_TEST}:internal", []))
+        package["test_standard_library_imports"] = sorted(
+            imports_by_kind.get(f"{SOURCE_SCOPE_TEST}:standard_library", [])
+        )
+        package["test_external_imports"] = sorted(imports_by_kind.get(f"{SOURCE_SCOPE_TEST}:external", []))
+        package["generated_internal_imports"] = sorted(
+            imports_by_kind.get(f"{SOURCE_SCOPE_GENERATED}:internal", [])
+        )
+        package["generated_standard_library_imports"] = sorted(
+            imports_by_kind.get(f"{SOURCE_SCOPE_GENERATED}:standard_library", [])
+        )
+        package["generated_external_imports"] = sorted(
+            imports_by_kind.get(f"{SOURCE_SCOPE_GENERATED}:external", [])
+        )
 
     return edges
 

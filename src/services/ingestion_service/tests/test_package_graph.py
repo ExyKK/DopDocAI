@@ -142,10 +142,13 @@ func Load() Config {
         "edges_total": 8,
         "entrypoint_packages_total": 1,
         "external_edges_total": 1,
+        "file_source_scope_counts": {"runtime": 3, "test": 1},
         "files_without_package_total": 0,
         "go_files_total": 4,
         "internal_edges_total": 4,
+        "package_source_scope_counts": {"runtime": 3, "test": 1},
         "packages_total": 4,
+        "runtime_packages_total": 3,
         "standard_library_edges_total": 3,
         "vendor_edges_total": 0,
     }
@@ -159,17 +162,23 @@ func Load() Config {
     assert cmd_api["is_entrypoint"] is True
     assert cmd_api["entrypoint_kind"] == "cmd"
     assert cmd_api["import_path"] == "github.com/acme/project/cmd/api"
+    assert cmd_api["source_scope"] == "runtime"
+    assert cmd_api["runtime_files_total"] == 1
     assert cmd_api["internal_imports"] == [
         "github.com/acme/project/internal/service",
         "github.com/acme/project/pkg/config",
     ]
+    assert cmd_api["runtime_internal_imports"] == cmd_api["internal_imports"]
     assert cmd_api["standard_library_imports"] == ["context"]
     assert cmd_api["external_imports"] == ["github.com/rs/zerolog/log"]
 
     assert service["package_id"] == "github.com/acme/project/internal/service#service"
     assert service_test["package_id"] == "github.com/acme/project/internal/service#service_test"
     assert service_test["is_test_package"] is True
+    assert service_test["source_scope"] == "test"
+    assert service_test["runtime_scope"] is False
     assert service_test["internal_imports"] == ["github.com/acme/project/internal/service"]
+    assert service_test["test_internal_imports"] == ["github.com/acme/project/internal/service"]
     assert config["imports"] == []
 
     assert document["entrypoints"] == [
@@ -180,6 +189,8 @@ func Load() Config {
             "import_path": "github.com/acme/project/cmd/api",
             "name": "main",
             "package_id": "github.com/acme/project/cmd/api#main",
+            "runtime_scope": True,
+            "source_scope": "runtime",
         }
     ]
 
@@ -193,12 +204,20 @@ func Load() Config {
     assert main_to_service["to_package_id"] == "github.com/acme/project/internal/service#service"
     assert main_to_service["to_dir_path"] == "internal/service"
     assert main_to_service["files"] == ["cmd/api/main.go"]
+    assert main_to_service["source_scope_counts"] == {"runtime": 1}
+    assert main_to_service["runtime_scope"] is True
 
     service_to_config = edges_by_key[
         ("github.com/acme/project/internal/service#service", "github.com/acme/project/pkg/config")
     ]
     assert service_to_config["kind"] == "internal"
     assert service_to_config["to_package_id"] == "github.com/acme/project/pkg/config#config"
+
+    test_to_service = edges_by_key[
+        ("github.com/acme/project/internal/service#service_test", "github.com/acme/project/internal/service")
+    ]
+    assert test_to_service["source_scope_counts"] == {"test": 1}
+    assert test_to_service["runtime_scope"] is False
 
     assert edges_by_key[("github.com/acme/project/cmd/api#main", "context")]["kind"] == "standard_library"
     assert (

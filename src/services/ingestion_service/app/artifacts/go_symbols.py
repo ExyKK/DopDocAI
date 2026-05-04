@@ -7,6 +7,7 @@ from typing import Any
 from git import Repo
 
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
+from app.artifacts.source_scope import infer_source_scope, runtime_scope_from_source_scope
 from app.infra.treesitter_client import TreeSitterManager
 from app.worker.snapshot_resolver import list_head_tree_files
 
@@ -28,6 +29,8 @@ def build_go_symbols_artifact(
     files: list[dict[str, Any]] = []
     symbols: list[dict[str, Any]] = []
     kind_counts = Counter()
+    file_source_scopes = Counter()
+    symbol_source_scopes = Counter()
     packages: set[str] = set()
     files_with_symbols_total = 0
     files_with_parse_errors_total = 0
@@ -46,6 +49,16 @@ def build_go_symbols_artifact(
         if parsed.parse_error:
             files_with_parse_errors_total += 1
 
+        source_scope = infer_source_scope(
+            parsed.path,
+            kind="go",
+            is_generated=parsed.is_generated,
+            is_test=parsed.is_test,
+            is_vendor=parsed.is_vendor,
+        )
+        runtime_scope = runtime_scope_from_source_scope(source_scope)
+        file_source_scopes[source_scope] += 1
+
         file_record = {
             "path": parsed.path,
             "package": parsed.package,
@@ -61,6 +74,8 @@ def build_go_symbols_artifact(
             "is_generated": parsed.is_generated,
             "is_test": parsed.is_test,
             "is_vendor": parsed.is_vendor,
+            "source_scope": source_scope,
+            "runtime_scope": runtime_scope,
             "parse_error": parsed.parse_error,
             "symbols_total": len(parsed.symbols),
         }
@@ -71,6 +86,7 @@ def build_go_symbols_artifact(
 
         for symbol in parsed.symbols:
             kind_counts[symbol.kind] += 1
+            symbol_source_scopes[source_scope] += 1
             symbols.append(
                 {
                     "symbol_id": symbol.symbol_id,
@@ -99,6 +115,8 @@ def build_go_symbols_artifact(
                     "is_generated": parsed.is_generated,
                     "is_test": parsed.is_test,
                     "is_vendor": parsed.is_vendor,
+                    "source_scope": source_scope,
+                    "runtime_scope": runtime_scope,
                 }
             )
 
@@ -120,6 +138,9 @@ def build_go_symbols_artifact(
         "packages_total": len(packages),
         "symbols_total": len(symbols),
         "kind_counts": dict(sorted(kind_counts.items())),
+        "file_source_scope_counts": dict(sorted(file_source_scopes.items())),
+        "symbol_source_scope_counts": dict(sorted(symbol_source_scopes.items())),
+        "runtime_symbols_total": symbol_source_scopes.get("runtime", 0),
     }
 
     document = {

@@ -535,11 +535,120 @@
 - documentation planner может выбрать backend/frontend/infra sections без глубокого парсинга каждого языка;
 - отсутствие parser-а для языка не блокирует useful summary и retrieval indexing.
 
+### INGEST-017 — Разделить runtime, test, generated и docs source scopes в analysis artifacts
+- Priority: `P0`
+- Depends on: `INGEST-015`, `INGEST-016`
+- Status: `completed`
+- Goal: убрать шум из planning artifacts, который стал виден на реальных репозиториях `spf13/cobra` и `DopDopTeam/image-board`.
+- Tasks:
+- ввести единый `source_scope`/`runtime_scope` для файлов, symbols, packages, config findings и HTTP findings: `runtime`, `test`, `generated`, `docs`, `infra`, `vendor`;
+- не смешивать `_test.go`, test fixtures и generated docs с runtime summaries;
+- ранжировать `project_model.code_outline.important_symbols` сначала по runtime/exported symbols, а тестовые symbols держать отдельно или сильно понижать;
+- разделить package counters/imports на runtime/test/generated, чтобы `doc_test` и test-only imports не выглядели как основные package dependencies;
+- сохранять ссылки на test/generated artifacts для retrieval, но не использовать их как primary planning context.
+- Acceptance:
+- `cobra` не получает test-heavy `important_symbols` и test flags как runtime config;
+- package summaries явно показывают runtime/test/generated counts;
+- docs planner может отличить production API/code от tests и generated support files.
+
+### INGEST-018 — Уточнить extraction env/flag/config keys в Go коде
+- Priority: `P0`
+- Depends on: `INGEST-006`, `INGEST-017`
+- Goal: убрать false positives вроде dynamic env expressions и одновременно сохранить полезные runtime config hints.
+- Tasks:
+- считать high-confidence env/flag key только из string literals или надежно inferred wrapper calls;
+- dynamic expressions вроде `activeHelpEnvVar(cmd.Root().Name())`, `configEnvVar(...)` и параметров helper functions сохранять как `dynamic_env_reference`, а не как конкретный key;
+- поддержать простые wrappers, где literal key передается в функцию чтения env/config, например `getEnv("PORT", defaultValue)`;
+- добавить confidence/source expression metadata для env/flag findings;
+- dedupe findings по workspace unit, service/package и source scope.
+- Acceptance:
+- `cobra` не содержит env keys, составленных из expression text;
+- `image-board` не содержит ложный key `key` из helper parameter `getEnv(key, ...)`;
+- реальные literal env/flag keys продолжают попадать в `config_inventory`.
+
+### INGEST-019 — Отделить DTO/API models от runtime config structs
+- Priority: `P0`
+- Depends on: `INGEST-006`, `INGEST-014`, `INGEST-017`
+- Goal: не считать request/response DTO, claims и persistence models runtime-конфигурацией приложения.
+- Tasks:
+- классифицировать structs по path/name/tags/import context как `runtime_config`, `api_contract`, `persistence_model`, `auth_claims`, `unknown`;
+- считать `json`, `binding`, `gorm`, `bson`, `swagger` tags сигналами data contract, а не runtime config сами по себе;
+- считать runtime config только по сильным hints: `env`, `mapstructure`, `envconfig`, `default`, `required` рядом с config/env packages или config paths;
+- перенести compact summary API/data models в отдельный раздел `project_model.data_contracts` или source artifact refs, не раздувая `config_inventory`;
+- обновить downstream summaries так, чтобы `required` в DTO не превращался в required runtime setting.
+- Acceptance:
+- `image-board` не показывает `Claims`, `LoginRequest`, `Board`, `PostDTO` и похожие DTO как runtime config structs;
+- runtime config counts заметно уменьшаются без потери API/data model discoverability;
+- docs generator может отдельно описывать configuration и API contracts.
+
+### INGEST-020 — Заменить ad-hoc YAML/config flattening и отдельно обрабатывать lockfiles
+- Priority: `P0`
+- Depends on: `INGEST-014`, `INGEST-017`
+- Goal: сделать config inventory точнее на GitHub workflows, Dependabot, Swagger YAML и JS lockfiles.
+- Tasks:
+- перейти на structured YAML parsing или array-aware flattening для `*.yml/*.yaml`;
+- корректно представлять массивы и повторяющиеся keys без collapse в один путь вроде `updates.directory`;
+- исправить OpenAPI/Swagger YAML summary через `info`-scoped parsing, чтобы `title` не брался из вложенного `description`;
+- классифицировать `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `go.sum` как dependency lock artifacts, а не runtime config files;
+- дать lockfiles compact dependency summary или только metadata refs, без раскладки тысяч keys.
+- Acceptance:
+- `.github/labeler.yml` и похожие YAML файлы не дают пустой или разрушенный key summary;
+- Dependabot arrays сохраняются различимо;
+- `frontend/package-lock.json` не попадает в runtime `config_inventory.config_files`;
+- Swagger YAML title extraction стабилен на `image-board`.
+
+### INGEST-021 — Сжать `project_model` v2.1 и уточнить workspace ownership
+- Priority: `P0`
+- Depends on: `INGEST-015`, `INGEST-016`, `INGEST-017`
+- Goal: удержать `project_model` в разумном LLM planning budget на средних monorepo.
+- Tasks:
+- убрать дублирование `go.important_packages` между top-level summary и `workspace_units[].go`, оставив refs/counts/top N per unit;
+- ограничить per-workspace summaries: top packages/routes/scripts/components, counts и artifact refs вместо повторения подробных payloads;
+- добавить regression budget tests по bytes/estimated tokens на fixture уровня `image-board`;
+- улучшить ownership для docs/site/static/assets units, а не отдавать их backend root unit по умолчанию;
+- расширить infra/database ownership hints для `.gitlab-ci.yml`, `*stack.yml`, `infrastructure/**`, SQL migrations/seeds и compose files;
+- расширить frontend API client hints на `services`, `http`, `api`, `client`, `clients`, generated SDK paths;
+- связать `api_specs` с `workspace_unit_id`/service, когда spec явно лежит внутри service docs.
+- Acceptance:
+- `project_model` для `image-board` становится существенно меньше и не дублирует package summaries;
+- workspace units лучше отражают backend/frontend/infra/docs/database границы;
+- frontend service/http directories распознаются как API-client hints.
+
+### INGEST-022 — Укрепить HTTP route extraction against non-router method calls
+- Priority: `P0`
+- Depends on: `INGEST-013`, `INGEST-016`, `INGEST-017`
+- Goal: убрать ложные routes из обычных method calls вроде `Header.Get`, `gin.Context.Get` и context helpers.
+- Tasks:
+- отслеживать router/group variables и разрешать route methods только на известных router receivers или route group receivers;
+- валидировать path candidates: route-like literal paths, known framework wildcards и confidence для нестандартных cases;
+- игнорировать `c.Get(...)`, `r.Header.Get(...)`, `Request.Context()` и похожие non-router вызовы;
+- сохранять ignored candidates/diagnostics для отладки extraction без загрязнения `http_surface.routes`;
+- продолжить связывать routes с package, handler, source file и `workspace_unit_id`.
+- Acceptance:
+- `image-board` не содержит routes `Authorization`, `X-User-Name`, `X-User-Role` и похожих header/context keys;
+- реальные Gin/Chi/Echo/Fiber/Gorilla/net-http routes остаются в `http_surface`;
+- unsupported patterns относятся к route registration, а не к произвольным method calls.
+
+### INGEST-023 — Повысить signal/noise `commit_log` для merge-heavy histories
+- Priority: `P1`
+- Depends on: `INGEST-010`, `INGEST-016`
+- Goal: сделать `commit_log.json` полезнее для будущей diff-aware документации на репозиториях с большим числом merge commits.
+- Tasks:
+- отделить merge commits от ordinary commits в summary и counters;
+- добавить first-parent/merge-aware view или compact merge summary, чтобы пустые `touched_files` не доминировали в recent history;
+- связывать touched files/packages с `workspace_unit_id`, когда ownership уже известен;
+- ограничить message/body snippets и выделить themes по workspace units/package paths;
+- явно фиксировать commits без file stats и причину: merge, shallow history, unreachable diff, parsing limit.
+- Acceptance:
+- merge-heavy history вроде `image-board` не выглядит как набор пустых изменений;
+- docs generator получает compact themes по backend/frontend/infra/docs units;
+- `commit_log` остается deterministic и bounded по размеру.
+
 ## Epic RAG — Vector Index And Retrieval
 
 ### RAG-001 — Выбрать модель хранения в Qdrant
 - Priority: `P0`
-- Depends on: `INGEST-002`, `INGEST-016`
+- Depends on: `INGEST-002`, `INGEST-016`, `INGEST-017`, `INGEST-021`
 - Goal: перейти от коллекции на repo к коллекции на schema/version.
 - Tasks:
 - создать дизайн `code_chunks_v1`;
@@ -954,6 +1063,8 @@
 - в репозитории не осталось активно используемого legacy кода для замененных сервисов.
 
 ## Suggested First Implementation Slice
+
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-016`. Перед переходом к `RAG-001` теперь нужно закрыть artifact-quality слой `INGEST-017`-`INGEST-022`; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
