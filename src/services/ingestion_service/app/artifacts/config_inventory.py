@@ -22,6 +22,22 @@ _STRUCT_START_RE = re.compile(r"^\s*type\s+([A-Za-z_]\w*)\s+struct\s*\{")
 _STRUCT_TAG_RE = re.compile(r'([A-Za-z_]\w*):"([^"]*)"')
 _CONFIG_TAGS = {"json", "yaml", "toml", "mapstructure", "env", "envconfig"}
 _REDACT_KEY_PARTS = {"secret", "password", "passwd", "token", "apikey", "api_key", "private_key"}
+_MAX_CONFIG_FILE_BYTES = 256 * 1024
+_MAX_CONFIG_KEYS_PER_FILE = 256
+_MAX_CONFIG_NESTING_DEPTH = 8
+_API_SPEC_FILENAMES = {
+    "api-docs.json",
+    "api-docs.yaml",
+    "api-docs.yml",
+    "openapi.json",
+    "openapi.yaml",
+    "openapi.yml",
+    "swagger.json",
+    "swagger.yaml",
+    "swagger.yml",
+}
+_API_SPEC_PATH_PARTS = {"api-docs", "apidocs", "openapi", "swagger"}
+_HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
 
 def build_config_inventory_artifact(
@@ -38,14 +54,16 @@ def build_config_inventory_artifact(
     source_index = _build_go_source_index(go_symbols)
 
     env_vars, flags, config_structs = _scan_go_sources(repo_root, go_symbols, source_index)
-    config_files = _scan_config_files(repo_root, file_inventory)
+    config_files, api_specs = _scan_config_files(repo_root, file_inventory)
 
     env_vars.sort(key=lambda item: (item["key"], item["source"]["file_path"], item["source"]["start_line"]))
     flags.sort(key=lambda item: (item["name"], item["source"]["file_path"], item["source"]["start_line"]))
     config_structs.sort(key=lambda item: (item["source"]["file_path"], item["source"]["start_line"], item["name"]))
     config_files.sort(key=lambda item: item["path"])
+    api_specs.sort(key=lambda item: item["path"])
 
     config_file_keys_total = sum(len(item["keys"]) for item in config_files)
+    config_files_truncated_total = sum(1 for item in config_files if item["truncated"])
     required_items_total = (
         sum(1 for item in env_vars if item["required"])
         + sum(1 for item in flags if item["required"])
@@ -62,9 +80,17 @@ def build_config_inventory_artifact(
         "config_structs_total": len(config_structs),
         "config_files_total": len(config_files),
         "config_file_keys_total": config_file_keys_total,
+        "config_files_truncated_total": config_files_truncated_total,
+        "api_specs_total": len(api_specs),
+        "api_spec_kind_counts": dict(sorted(Counter(item["spec_kind"] for item in api_specs).items())),
         "configuration_items_total": len(env_vars) + len(flags) + len(config_structs) + config_file_keys_total,
         "required_items_total": required_items_total,
         "config_file_format_counts": dict(sorted(Counter(item["format"] for item in config_files).items())),
+        "config_file_parse_limits": {
+            "max_file_bytes": _MAX_CONFIG_FILE_BYTES,
+            "max_keys_per_file": _MAX_CONFIG_KEYS_PER_FILE,
+            "max_nesting_depth": _MAX_CONFIG_NESTING_DEPTH,
+        },
     }
 
     document = {
@@ -80,6 +106,7 @@ def build_config_inventory_artifact(
         "flags": flags,
         "config_structs": config_structs,
         "config_files": config_files,
+        "api_specs": api_specs,
     }
 
     payload = (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -332,11 +359,12 @@ def _config_keys_from_tags(tag_map: dict[str, str]) -> list[dict[str, str]]:
     return keys
 
 
-def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> list[dict[str, Any]]:
+def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     config_files: list[dict[str, Any]] = []
+    api_specs: list[dict[str, Any]] = []
 
     for file_record in file_inventory.get("files", []):
-        if file_record.get("kind") != "config" or file_record.get("is_binary"):
+        if file_record.get("is_binary"):
             continue
 
         path = file_record["path"]
@@ -344,53 +372,136 @@ def _scan_config_files(repo_root: Path, file_inventory: dict[str, Any]) -> list[
             continue
 
         config_format = _config_format(path)
+        if file_record.get("kind") == "api_spec" or file_record.get("is_api_spec"):
+            if config_format is None:
+                continue
+
+            text, file_truncated = _read_text_with_cap(repo_root / path, _MAX_CONFIG_FILE_BYTES)
+            api_specs.append(
+                _summarize_api_spec(
+                    path,
+                    config_format,
+                    text,
+                    file_record,
+                    source="file_classification",
+                    truncated=file_truncated,
+                )
+            )
+            continue
+
+        if file_record.get("kind") != "config":
+            continue
+
         if config_format is None:
             continue
 
         source_path = repo_root / path
-        text = source_path.read_text(encoding="utf-8", errors="replace")
-        keys, parse_error = _extract_config_file_keys(text, config_format)
+        text, file_truncated = _read_text_with_cap(source_path, _MAX_CONFIG_FILE_BYTES)
+        if _looks_like_api_spec_document(path, text, config_format):
+            api_specs.append(
+                _summarize_api_spec(
+                    path,
+                    config_format,
+                    text,
+                    file_record,
+                    source="content_hints",
+                    truncated=file_truncated,
+                )
+            )
+            continue
+
+        keys, parse_error, keys_truncated, truncation_reason = _extract_config_file_keys(
+            text,
+            config_format,
+            file_truncated=file_truncated,
+        )
         config_files.append(
             {
                 "path": path,
                 "format": config_format,
                 "keys": keys,
                 "parse_error": parse_error,
+                "truncated": file_truncated or keys_truncated,
+                "truncation_reason": "max_file_bytes_exceeded" if file_truncated else truncation_reason,
                 "size_bytes": file_record.get("size_bytes", 0),
                 "line_count": file_record.get("line_count", 0),
             }
         )
 
-    return config_files
+    return config_files, api_specs
 
 
-def _extract_config_file_keys(text: str, config_format: str) -> tuple[list[dict[str, Any]], bool]:
+def _extract_config_file_keys(
+    text: str,
+    config_format: str,
+    *,
+    file_truncated: bool = False,
+) -> tuple[list[dict[str, Any]], bool, bool, str | None]:
+    if file_truncated:
+        return [], False, True, "max_file_bytes_exceeded"
+
     try:
         if config_format == "json":
-            return _flatten_config_mapping(json.loads(text)), False
+            keys, truncated, reason = _flatten_config_mapping(json.loads(text))
+            return keys, False, truncated, reason
         if config_format == "toml":
-            return _flatten_config_mapping(tomllib.loads(text)), False
+            keys, truncated, reason = _flatten_config_mapping(tomllib.loads(text))
+            return keys, False, truncated, reason
         if config_format == "yaml":
-            return _parse_yaml_like_keys(text), False
+            keys, truncated, reason = _limit_config_keys(_parse_yaml_like_keys(text))
+            return keys, False, truncated, reason
         if config_format == "dotenv":
-            return _parse_env_like_keys(text), False
+            keys, truncated, reason = _limit_config_keys(_parse_env_like_keys(text))
+            return keys, False, truncated, reason
         if config_format == "properties":
-            return _parse_properties_like_keys(text), False
+            keys, truncated, reason = _limit_config_keys(_parse_properties_like_keys(text))
+            return keys, False, truncated, reason
         if config_format == "ini":
-            return _parse_ini_keys(text), False
+            keys, truncated, reason = _limit_config_keys(_parse_ini_keys(text))
+            return keys, False, truncated, reason
     except Exception:
-        return [], True
+        return [], True, False, None
 
-    return [], False
+    return [], False, False, None
 
 
-def _flatten_config_mapping(value: Any, prefix: str = "") -> list[dict[str, Any]]:
-    keys: list[dict[str, Any]] = []
+def _flatten_config_mapping(
+    value: Any,
+    prefix: str = "",
+    *,
+    depth: int = 0,
+    keys: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    if keys is None:
+        keys = []
+
+    if len(keys) >= _MAX_CONFIG_KEYS_PER_FILE:
+        return keys, True, "max_keys_per_file_exceeded"
+
     if isinstance(value, dict):
+        if depth >= _MAX_CONFIG_NESTING_DEPTH:
+            if prefix:
+                keys.append(
+                    {
+                        "key": prefix,
+                        "value_kind": "object",
+                        "value_preview": None,
+                        "line": None,
+                    }
+                )
+            return keys, True, "max_nesting_depth_exceeded"
+
         for key in sorted(value):
             child_prefix = f"{prefix}.{key}" if prefix else str(key)
-            keys.extend(_flatten_config_mapping(value[key], child_prefix))
-        return keys
+            keys, truncated, reason = _flatten_config_mapping(
+                value[key],
+                child_prefix,
+                depth=depth + 1,
+                keys=keys,
+            )
+            if truncated:
+                return keys, truncated, reason
+        return keys, False, None
 
     keys.append(
         {
@@ -400,7 +511,187 @@ def _flatten_config_mapping(value: Any, prefix: str = "") -> list[dict[str, Any]
             "line": None,
         }
     )
-    return keys
+    return keys, False, None
+
+
+def _limit_config_keys(keys: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool, str | None]:
+    keys.sort(key=lambda item: item["key"])
+    if len(keys) <= _MAX_CONFIG_KEYS_PER_FILE:
+        return keys, False, None
+
+    return keys[:_MAX_CONFIG_KEYS_PER_FILE], True, "max_keys_per_file_exceeded"
+
+
+def _read_text_with_cap(path: Path, max_bytes: int) -> tuple[str, bool]:
+    with path.open("rb") as stream:
+        raw = stream.read(max_bytes + 1)
+
+    truncated = len(raw) > max_bytes
+    return raw[:max_bytes].decode("utf-8", errors="replace"), truncated
+
+
+def _looks_like_api_spec_document(path: str, text: str, config_format: str) -> bool:
+    if config_format not in {"json", "yaml"}:
+        return False
+
+    if _is_api_spec_path(path):
+        return True
+
+    if config_format == "json":
+        try:
+            return _is_api_spec_mapping(json.loads(text))
+        except Exception:
+            return _has_api_spec_text_hints(text)
+
+    return _has_api_spec_text_hints(text)
+
+
+def _summarize_api_spec(
+    path: str,
+    config_format: str,
+    text: str,
+    file_record: dict[str, Any],
+    *,
+    source: str,
+    truncated: bool,
+) -> dict[str, Any]:
+    summary = {
+        "path": path,
+        "format": config_format,
+        "spec_kind": "unknown",
+        "spec_version": None,
+        "title": None,
+        "version": None,
+        "paths_total": 0,
+        "operations_total": 0,
+        "source": source,
+        "parse_error": False,
+        "truncated": truncated,
+        "truncation_reason": "max_file_bytes_exceeded" if truncated else None,
+        "size_bytes": file_record.get("size_bytes", 0),
+        "line_count": file_record.get("line_count", 0),
+    }
+
+    try:
+        if config_format == "json" and not truncated:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                summary.update(_summarize_api_spec_mapping(parsed))
+                return summary
+    except Exception:
+        summary["parse_error"] = True
+
+    summary.update(_summarize_api_spec_text(text))
+    return summary
+
+
+def _summarize_api_spec_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    spec_kind = "openapi" if "openapi" in value else "swagger" if "swagger" in value else "unknown"
+    info = value.get("info") if isinstance(value.get("info"), dict) else {}
+    paths = value.get("paths") if isinstance(value.get("paths"), dict) else {}
+    operations_total = 0
+    for path_item in paths.values():
+        if not isinstance(path_item, dict):
+            continue
+
+        operations_total += sum(1 for method in path_item if str(method).lower() in _HTTP_METHODS)
+
+    return {
+        "spec_kind": spec_kind,
+        "spec_version": value.get("openapi") or value.get("swagger"),
+        "title": info.get("title"),
+        "version": info.get("version"),
+        "paths_total": len(paths),
+        "operations_total": operations_total,
+    }
+
+
+def _summarize_api_spec_text(text: str) -> dict[str, Any]:
+    version_match = re.search(
+        r'(?mi)(?:^|[{\n,]\s*)["\']?(openapi|swagger)["\']?\s*:\s*["\']?([^"\'\n,#}]+)',
+        text,
+    )
+    title_match = re.search(r"(?mi)^\s*title\s*:\s*['\"]?([^'\"\n#]+)", text)
+    app_version_match = re.search(r"(?mi)^\s*version\s*:\s*['\"]?([^'\"\n#]+)", text)
+    paths_total, operations_total = _count_yaml_api_paths(text)
+
+    spec_kind = version_match.group(1).lower() if version_match else "unknown"
+    return {
+        "spec_kind": spec_kind,
+        "spec_version": version_match.group(2).strip() if version_match else None,
+        "title": title_match.group(1).strip() if title_match else None,
+        "version": app_version_match.group(1).strip() if app_version_match else None,
+        "paths_total": paths_total,
+        "operations_total": operations_total,
+    }
+
+
+def _count_yaml_api_paths(text: str) -> tuple[int, int]:
+    paths_indent: int | None = None
+    current_path_indent: int | None = None
+    paths_total = 0
+    operations_total = 0
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip())
+        stripped = raw_line.strip()
+        if paths_indent is None:
+            if re.match(r"^paths\s*:\s*$", stripped):
+                paths_indent = indent
+            continue
+
+        if indent <= paths_indent:
+            break
+
+        key_match = re.match(r"^['\"]?([^:'\"]+)['\"]?\s*:\s*(?:#.*)?$", stripped)
+        if key_match is None:
+            continue
+
+        key = key_match.group(1)
+        if key.startswith("/") and (current_path_indent is None or indent <= current_path_indent):
+            current_path_indent = indent
+            paths_total += 1
+            continue
+
+        if current_path_indent is not None and indent > current_path_indent and key.lower() in _HTTP_METHODS:
+            operations_total += 1
+
+    return paths_total, operations_total
+
+
+def _is_api_spec_mapping(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+
+    has_version = "openapi" in value or "swagger" in value
+    has_paths = isinstance(value.get("paths"), dict)
+    has_schema_section = isinstance(value.get("components"), dict) or isinstance(value.get("definitions"), dict)
+    return has_version and has_paths and (has_schema_section or isinstance(value.get("info"), dict))
+
+
+def _has_api_spec_text_hints(text: str) -> bool:
+    has_version = re.search(r'(?mi)(?:^|[{\n,]\s*)["\']?(?:openapi|swagger)["\']?\s*:', text) is not None
+    has_paths = re.search(r'(?mi)(?:^|[{\n,]\s*)["\']?paths["\']?\s*:', text) is not None
+    has_schema_section = (
+        re.search(r'(?mi)(?:^|[{\n,]\s*)["\']?components["\']?\s*:', text) is not None
+        or re.search(r'(?mi)(?:^|[{\n,]\s*)["\']?definitions["\']?\s*:', text) is not None
+    )
+    return has_version and (has_paths or has_schema_section)
+
+
+def _is_api_spec_path(path: str) -> bool:
+    pure_path = PurePosixPath(path)
+    lower_name = pure_path.name.lower()
+    lower_parts = {part.lower() for part in pure_path.parts}
+    suffix = pure_path.suffix.lower()
+
+    if lower_name in _API_SPEC_FILENAMES:
+        return True
+
+    return suffix in {".json", ".yaml", ".yml"} and bool(lower_parts.intersection(_API_SPEC_PATH_PARTS))
 
 
 def _parse_yaml_like_keys(text: str) -> list[dict[str, Any]]:

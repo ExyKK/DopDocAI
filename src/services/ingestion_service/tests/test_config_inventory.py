@@ -3,7 +3,12 @@ from pathlib import Path
 
 from git import Actor, Repo
 
-from app.artifacts.config_inventory import build_config_inventory_artifact
+from app.artifacts.config_inventory import (
+    _MAX_CONFIG_FILE_BYTES,
+    _MAX_CONFIG_KEYS_PER_FILE,
+    _MAX_CONFIG_NESTING_DEPTH,
+    build_config_inventory_artifact,
+)
 from app.artifacts.file_inventory import build_file_inventory_artifact
 from app.artifacts.go_symbols import build_go_symbols_artifact
 
@@ -53,6 +58,10 @@ feature:
 """,
     )
     _write_text(
+        tmp_path / "config" / "large.json",
+        json.dumps({f"key_{index:03d}": index for index in range(300)}, sort_keys=True) + "\n",
+    )
+    _write_text(
         tmp_path / "config" / "app.toml",
         """[http]
 addr = ":9000"
@@ -63,6 +72,21 @@ addr = ":9000"
         """APP_ENV=development
 DATABASE_URL=postgres://localhost
 APP_TOKEN=example-token
+""",
+    )
+    _write_text(
+        tmp_path / "docs" / "swagger" / "swagger.json",
+        """{
+  "swagger": "2.0",
+  "info": {"title": "Image Board API", "version": "v1"},
+  "paths": {
+    "/posts": {
+      "get": {"responses": {"200": {"description": "ok"}}},
+      "post": {"responses": {"201": {"description": "created"}}}
+    }
+  },
+  "definitions": {"Post": {"type": "object"}}
+}
 """,
     )
 
@@ -126,19 +150,27 @@ APP_TOKEN=example-token
     assert document["summary"] == {
         "config_file_format_counts": {
             "dotenv": 1,
-            "json": 1,
+            "json": 2,
             "toml": 1,
             "yaml": 1,
         },
-        "config_file_keys_total": 10,
-        "config_files_total": 4,
+        "api_spec_kind_counts": {"swagger": 1},
+        "api_specs_total": 1,
+        "config_file_keys_total": 266,
+        "config_file_parse_limits": {
+            "max_file_bytes": _MAX_CONFIG_FILE_BYTES,
+            "max_keys_per_file": _MAX_CONFIG_KEYS_PER_FILE,
+            "max_nesting_depth": _MAX_CONFIG_NESTING_DEPTH,
+        },
+        "config_files_total": 5,
+        "config_files_truncated_total": 1,
         "config_structs_total": 1,
-        "configuration_items_total": 16,
+        "configuration_items_total": 272,
         "env_vars_total": 2,
         "flags_total": 3,
         "required_items_total": 4,
     }
-    assert artifact_one.row_count == 16
+    assert artifact_one.row_count == 272
 
     env_by_key = {item["key"]: item for item in document["env_vars"]}
     assert env_by_key["APP_ENV"]["required"] is False
@@ -166,6 +198,8 @@ APP_TOKEN=example-token
     assert fields_by_name["Token"]["required"] is True
 
     config_files_by_path = {item["path"]: item for item in document["config_files"]}
+    assert "docs/swagger/swagger.json" not in config_files_by_path
+
     yaml_keys = {item["key"]: item for item in config_files_by_path["config/app.yaml"]["keys"]}
     assert yaml_keys["feature.enabled"]["value_kind"] == "bool"
     assert yaml_keys["server.token"]["value_preview"] == "<redacted>"
@@ -177,6 +211,30 @@ APP_TOKEN=example-token
     env_keys = {item["key"]: item for item in config_files_by_path[".env.example"]["keys"]}
     assert env_keys["APP_TOKEN"]["value_preview"] == "<redacted>"
     assert env_keys["DATABASE_URL"]["value_preview"] == "postgres://localhost"
+
+    large_config = config_files_by_path["config/large.json"]
+    assert large_config["truncated"] is True
+    assert large_config["truncation_reason"] == "max_keys_per_file_exceeded"
+    assert len(large_config["keys"]) == _MAX_CONFIG_KEYS_PER_FILE
+
+    assert document["api_specs"] == [
+        {
+            "format": "json",
+            "line_count": 11,
+            "operations_total": 2,
+            "parse_error": False,
+            "path": "docs/swagger/swagger.json",
+            "paths_total": 1,
+            "source": "file_classification",
+            "size_bytes": len((tmp_path / "docs" / "swagger" / "swagger.json").read_bytes()),
+            "spec_kind": "swagger",
+            "spec_version": "2.0",
+            "title": "Image Board API",
+            "truncated": False,
+            "truncation_reason": None,
+            "version": "v1",
+        }
+    ]
 
 
 def _commit_all(repo: Repo, repo_root: Path) -> None:

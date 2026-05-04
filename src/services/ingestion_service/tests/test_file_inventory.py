@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
 from git import Actor, Repo
 
 from app.artifacts.file_inventory import build_file_inventory_artifact
@@ -11,6 +10,11 @@ def test_build_file_inventory_artifact_is_deterministic_and_classifies_files(tmp
     _write_text(tmp_path / "README.md", "# hello\n")
     _write_text(tmp_path / "cmd" / "main.go", "package main\nfunc main() {}\n")
     _write_text(tmp_path / "config" / "app.yaml", "port: 8080\n")
+    _write_text(
+        tmp_path / "docs" / "swagger" / "swagger.json",
+        """{"swagger":"2.0","info":{"title":"API","version":"v1"},"paths":{"/health":{"get":{}}},"definitions":{}}
+""",
+    )
     _write_text(tmp_path / "pkg" / "service_test.go", "package pkg\n")
     _write_text(
         tmp_path / "internal" / "generated.pb.go",
@@ -44,11 +48,12 @@ def test_build_file_inventory_artifact_is_deterministic_and_classifies_files(tmp
 
     assert artifact.artifact_kind == "file_inventory"
     assert artifact.schema_version == 1
-    assert artifact.row_count == 7
+    assert artifact.row_count == 8
     assert artifact.storage_key.endswith("/analysis/file_inventory.schema-v1.json")
 
     assert [item["path"] for item in files] == sorted(item["path"] for item in files)
     assert document["summary"]["kind_counts"] == {
+        "api_spec": 1,
         "binary": 1,
         "config": 1,
         "generated": 1,
@@ -62,6 +67,9 @@ def test_build_file_inventory_artifact_is_deterministic_and_classifies_files(tmp
     assert by_path["README.md"]["kind"] == "markdown"
     assert by_path["cmd/main.go"]["kind"] == "go"
     assert by_path["config/app.yaml"]["kind"] == "config"
+    assert by_path["docs/swagger/swagger.json"]["kind"] == "api_spec"
+    assert by_path["docs/swagger/swagger.json"]["is_api_spec"] is True
+    assert by_path["docs/swagger/swagger.json"]["is_generated_doc"] is True
     assert by_path["pkg/service_test.go"]["kind"] == "test"
     assert by_path["internal/generated.pb.go"]["kind"] == "generated"
     assert by_path["vendor/github.com/pkg/lib.go"]["kind"] == "vendor"

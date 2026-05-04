@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,6 +27,19 @@ _CONFIG_EXTENSIONS = {
     ".xml",
 }
 _CONFIG_FILENAMES = {"dockerfile", "makefile", ".gitignore", ".editorconfig", ".env", ".env.example"}
+_API_SPEC_FILENAMES = {
+    "api-docs.json",
+    "api-docs.yaml",
+    "api-docs.yml",
+    "openapi.json",
+    "openapi.yaml",
+    "openapi.yml",
+    "swagger.json",
+    "swagger.yaml",
+    "swagger.yml",
+}
+_API_SPEC_PATH_PARTS = {"api-docs", "apidocs", "openapi", "swagger"}
+_GENERATED_DOC_PATH_PARTS = {"api-docs", "apidocs", "swagger-ui"}
 
 
 def build_file_inventory_artifact(
@@ -108,6 +122,8 @@ def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[st
     parts = {part.lower() for part in pure_path.parts}
 
     is_vendor = "vendor" in parts
+    is_api_spec = _is_api_spec(pure_path, raw)
+    is_generated_doc = _is_generated_doc_path(pure_path)
     is_generated = _is_generated(lower_name, raw)
     is_test = _is_test(lower_name, parts)
 
@@ -115,7 +131,9 @@ def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[st
         kind = "binary"
     elif is_vendor:
         kind = "vendor"
-    elif is_generated:
+    elif is_api_spec:
+        kind = "api_spec"
+    elif is_generated or is_generated_doc:
         kind = "generated"
     elif is_test:
         kind = "test"
@@ -130,6 +148,8 @@ def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[st
 
     return kind, {
         "is_generated": is_generated,
+        "is_generated_doc": is_generated_doc,
+        "is_api_spec": is_api_spec,
         "is_test": is_test,
         "is_vendor": is_vendor,
     }
@@ -163,6 +183,49 @@ def _is_generated(name: str, raw: bytes) -> bool:
 
     sample = raw[:4096].lower()
     return b"code generated" in sample or b"do not edit" in sample
+
+
+def _is_generated_doc_path(path: PurePosixPath) -> bool:
+    lower_parts = [part.lower() for part in path.parts]
+    if any(part in _GENERATED_DOC_PATH_PARTS for part in lower_parts):
+        return True
+
+    parts = set(lower_parts)
+    return {"docs", "swagger"}.issubset(parts) or {"docs", "openapi"}.issubset(parts)
+
+
+def _is_api_spec(path: PurePosixPath, raw: bytes) -> bool:
+    lower_name = path.name.lower()
+    lower_parts = {part.lower() for part in path.parts}
+    suffix = path.suffix.lower()
+
+    if lower_name in _API_SPEC_FILENAMES:
+        return True
+
+    if suffix in {".json", ".yaml", ".yml"} and lower_parts.intersection(_API_SPEC_PATH_PARTS):
+        return True
+
+    if suffix in {".json", ".yaml", ".yml"} and {"docs", "swagger"}.issubset(lower_parts):
+        return True
+
+    if suffix in {".json", ".yaml", ".yml"} and {"docs", "openapi"}.issubset(lower_parts):
+        return True
+
+    return suffix in {".json", ".yaml", ".yml"} and _looks_like_api_spec(raw)
+
+
+def _looks_like_api_spec(raw: bytes) -> bool:
+    sample = raw[:65536].decode("utf-8", errors="ignore").lower()
+    if not sample:
+        return False
+
+    has_version = re.search(r'(?m)(?:^|[{\n,]\s*)["\']?(?:openapi|swagger)["\']?\s*:', sample) is not None
+    has_paths = re.search(r'(?m)(?:^|[{\n,]\s*)["\']?paths["\']?\s*:', sample) is not None
+    has_schema_section = (
+        re.search(r'(?m)(?:^|[{\n,]\s*)["\']?components["\']?\s*:', sample) is not None
+        or re.search(r'(?m)(?:^|[{\n,]\s*)["\']?definitions["\']?\s*:', sample) is not None
+    )
+    return has_version and (has_paths or has_schema_section)
 
 
 def _is_test(name: str, parts: set[str]) -> bool:

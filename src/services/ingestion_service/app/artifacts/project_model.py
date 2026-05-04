@@ -300,6 +300,7 @@ def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, An
         "flags": config_inventory.get("flags", []),
         "config_structs": config_inventory.get("config_structs", []),
         "config_files": config_inventory.get("config_files", []),
+        "api_specs": config_inventory.get("api_specs", []),
     }
 
 

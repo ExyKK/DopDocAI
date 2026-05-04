@@ -490,6 +490,7 @@
 ### INGEST-014 — Отделить generated docs и API specs от config inventory
 - Priority: `P0`
 - Depends on: `INGEST-003`, `INGEST-006`
+- Status: `completed`
 - Goal: не раздувать `config_inventory.json` swagger/openapi/generated artifacts и не смешивать API specs с runtime config.
 - Tasks:
 - расширить file classification для `swagger.json/yaml`, `openapi.json/yaml`, `api-docs`, `docs/swagger`, generated docs;
