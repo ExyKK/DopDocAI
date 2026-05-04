@@ -8,7 +8,14 @@ from typing import Any
 from app.artifacts.models import BuiltAnalysisArtifact, analysis_artifact_storage_key
 
 PROJECT_MODEL_ARTIFACT_KIND = "project_model"
-PROJECT_MODEL_SCHEMA_VERSION = 1
+PROJECT_MODEL_SCHEMA_VERSION = 2
+
+_MAX_IMPORTANT_PACKAGES = 20
+_MAX_IMPORTANT_SYMBOLS = 40
+_MAX_CONFIG_ITEMS = 50
+_MAX_KEY_FILES = 40
+_MAX_UNIT_KEY_FILES = 20
+_MAX_DEPENDENCY_HINTS = 30
 
 _HTTP_IMPORTS = {
     "net/http": "net_http",
@@ -83,29 +90,42 @@ def build_project_model_artifact(
     config_inventory = _load_artifact_document(config_inventory_artifact)
 
     repository_layout = _build_repository_layout(file_inventory)
-    package_model = _build_package_model(package_graph)
-    symbol_model = _build_symbol_model(go_symbols)
-    configuration_model = _build_configuration_model(config_inventory)
     external_integrations = _detect_external_integrations(package_graph, config_inventory)
     http_surface = _detect_http_surface(repo_root, package_graph, go_symbols)
+    workspace_units = _build_workspace_units(
+        repo_root,
+        file_inventory=file_inventory,
+        package_graph=package_graph,
+        http_surface=http_surface,
+    )
+    workspace_unit_lookup = _build_workspace_unit_lookup(workspace_units)
+    go_model = _build_go_model(package_graph, workspace_unit_lookup)
+    code_outline = _build_code_outline(go_symbols, go_model["important_packages"])
+    configuration_model = _build_configuration_model(config_inventory)
 
     summary = {
         "files_total": file_inventory.get("summary", {}).get("files_total", snapshot_metadata["files_total"]),
+        "bytes_total": file_inventory.get("summary", {}).get("bytes_total", snapshot_metadata["bytes_total"]),
         "go_files_total": file_inventory.get("summary", {}).get("go_files_total", snapshot_metadata["go_files_total"]),
+        "workspace_units_total": len(workspace_units),
         "packages_total": package_graph.get("summary", {}).get("packages_total", 0),
         "symbols_total": go_symbols.get("summary", {}).get("symbols_total", 0),
         "entrypoint_packages_total": package_graph.get("summary", {}).get("entrypoint_packages_total", 0),
         "config_items_total": config_inventory.get("summary", {}).get("configuration_items_total", 0),
+        "config_files_total": config_inventory.get("summary", {}).get("config_files_total", 0),
+        "api_specs_total": config_inventory.get("summary", {}).get("api_specs_total", 0),
         "external_integrations_total": len(external_integrations),
         "http_surface_detected": http_surface["detected"],
         "http_routes_total": len(http_surface["routes"]),
         "has_tests": repository_layout["has_tests"],
         "has_generated_code": repository_layout["has_generated_code"],
+        "has_vendor": repository_layout["has_vendor"],
     }
 
     document = {
         "artifact_kind": PROJECT_MODEL_ARTIFACT_KIND,
         "schema_version": PROJECT_MODEL_SCHEMA_VERSION,
+        "model_kind": "compact_project_manifest",
         "snapshot": {
             "branch_name": snapshot_metadata["branch_name"],
             "commit_sha": snapshot_metadata["commit_sha"],
@@ -113,9 +133,9 @@ def build_project_model_artifact(
         },
         "summary": summary,
         "repository_layout": repository_layout,
-        "module": package_graph.get("module"),
-        "package_topology": package_model,
-        "symbols": symbol_model,
+        "workspace_units": workspace_units,
+        "go": go_model,
+        "code_outline": code_outline,
         "configuration": configuration_model,
         "external_integrations": external_integrations,
         "http_surface": http_surface,
@@ -126,6 +146,13 @@ def build_project_model_artifact(
             config_inventory_artifact,
         ),
     }
+    _attach_budget_metadata(
+        document,
+        file_inventory=file_inventory,
+        go_symbols=go_symbols,
+        package_graph=package_graph,
+        config_inventory=config_inventory,
+    )
 
     payload = (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     checksum_sha256 = hashlib.sha256(payload).hexdigest()
@@ -143,7 +170,7 @@ def build_project_model_artifact(
         ),
         checksum_sha256=checksum_sha256,
         size_bytes=len(payload),
-        row_count=summary["files_total"],
+        row_count=summary["workspace_units_total"],
         payload=payload,
         summary=summary,
     )
@@ -200,6 +227,7 @@ def _build_repository_layout(file_inventory: dict[str, Any]) -> dict[str, Any]:
     ]
     directories.sort(key=lambda item: (item["path"] != ".", item["path"]))
     key_files.sort(key=lambda item: item["path"])
+    key_files = key_files[:_MAX_KEY_FILES]
 
     return {
         "files_total": len(files),
@@ -213,95 +241,893 @@ def _build_repository_layout(file_inventory: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_package_model(package_graph: dict[str, Any]) -> dict[str, Any]:
-    packages = [_compact_package(package) for package in package_graph.get("packages", [])]
-    packages.sort(key=lambda item: item["package_id"])
-    edges = [_compact_edge(edge) for edge in package_graph.get("edges", [])]
-    edges.sort(key=lambda item: (item["from_package_id"], item["kind"], item["import_path"]))
+def _build_go_model(
+    package_graph: dict[str, Any],
+    workspace_unit_lookup: dict[str, Any],
+) -> dict[str, Any]:
+    packages = package_graph.get("packages", [])
+    important_packages = [
+        _compact_important_package(package, workspace_unit_lookup)
+        for package in _important_packages(packages)
+    ]
+    entrypoints = [
+        {
+            **entrypoint,
+            "workspace_unit_id": _workspace_unit_id_for_path(
+                entrypoint.get("dir_path", "."),
+                workspace_unit_lookup,
+            ),
+        }
+        for entrypoint in package_graph.get("entrypoints", [])
+    ]
+    entrypoints.sort(key=lambda item: (item["dir_path"], item["package_id"]))
 
     return {
         "summary": package_graph.get("summary", {}),
-        "packages": packages,
-        "edges": edges,
-        "entrypoints": package_graph.get("entrypoints", []),
+        "modules": _go_modules(package_graph),
+        "entrypoints": entrypoints,
+        "important_packages": important_packages,
+        "important_packages_omitted": max(0, len(packages) - len(important_packages)),
+        "dependency_summary": _go_dependency_summary(package_graph),
     }
 
 
-def _compact_package(package: dict[str, Any]) -> dict[str, Any]:
+def _important_packages(packages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = sorted(
+        packages,
+        key=lambda package: (
+            not package.get("is_entrypoint", False),
+            not package.get("is_command", False),
+            -int(package.get("symbols_total", 0)),
+            -int(package.get("files_total", 0)),
+            package.get("dir_path", ""),
+            package.get("package_id", ""),
+        ),
+    )
+    return ranked[:_MAX_IMPORTANT_PACKAGES]
+
+
+def _compact_important_package(
+    package: dict[str, Any],
+    workspace_unit_lookup: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "package_id": package["package_id"],
+        "workspace_unit_id": _workspace_unit_id_for_path(
+            package.get("dir_path", "."),
+            workspace_unit_lookup,
+        ),
         "name": package["name"],
         "dir_path": package["dir_path"],
         "import_path": package.get("import_path"),
+        "module_root": package.get("module_root"),
         "files_total": package.get("files_total", 0),
         "symbols_total": package.get("symbols_total", 0),
         "is_command": package.get("is_command", False),
         "is_entrypoint": package.get("is_entrypoint", False),
         "entrypoint_kind": package.get("entrypoint_kind"),
-        "internal_imports": package.get("internal_imports", []),
-        "external_imports": package.get("external_imports", []),
-        "standard_library_imports": package.get("standard_library_imports", []),
+        "external_imports": package.get("external_imports", [])[:_MAX_DEPENDENCY_HINTS],
+        "standard_library_imports": package.get("standard_library_imports", [])[:_MAX_DEPENDENCY_HINTS],
         "has_test_files": package.get("has_test_files", False),
+        "has_generated_files": package.get("has_generated_files", False),
         "has_parse_errors": package.get("has_parse_errors", False),
     }
 
 
-def _compact_edge(edge: dict[str, Any]) -> dict[str, Any]:
+def _go_modules(package_graph: dict[str, Any]) -> list[dict[str, Any]]:
+    modules = package_graph.get("modules") or []
+    if modules:
+        return modules
+
+    module = package_graph.get("module") or {}
+    if module.get("path") or module.get("go_mod_path"):
+        return [
+            {
+                "module_id": "go:.",
+                "root_dir": ".",
+                "path": module.get("path"),
+                "go_version": module.get("go_version"),
+                "toolchain": module.get("toolchain"),
+                "go_mod_path": module.get("go_mod_path"),
+            }
+        ]
+
+    return []
+
+
+def _go_dependency_summary(package_graph: dict[str, Any]) -> dict[str, Any]:
+    external = Counter()
+    standard = Counter()
+    internal = Counter()
+    for package in package_graph.get("packages", []):
+        external.update(package.get("external_imports", []))
+        standard.update(package.get("standard_library_imports", []))
+        internal.update(package.get("internal_imports", []))
+
     return {
-        "from_package_id": edge["from_package_id"],
-        "to_package_id": edge.get("to_package_id"),
-        "import_path": edge["import_path"],
-        "kind": edge["kind"],
-        "files": edge.get("files", []),
+        "external_imports_top": _counter_top(external),
+        "standard_library_imports_top": _counter_top(standard),
+        "internal_imports_top": _counter_top(internal),
     }
 
 
-def _build_symbol_model(go_symbols: dict[str, Any]) -> dict[str, Any]:
-    by_kind = Counter()
-    by_package = Counter()
-    symbols: list[dict[str, Any]] = []
+def _counter_top(counter: Counter[str]) -> list[dict[str, Any]]:
+    return [
+        {"name": name, "count": count}
+        for name, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))[:_MAX_DEPENDENCY_HINTS]
+    ]
 
-    for symbol in go_symbols.get("symbols", []):
-        by_kind[symbol["kind"]] += 1
-        if symbol.get("package"):
-            by_package[symbol["package"]] += 1
-        symbols.append(
-            {
-                "symbol_id": symbol["symbol_id"],
-                "kind": symbol["kind"],
-                "qualified_name": symbol["qualified_name"],
-                "name": symbol["name"],
-                "package": symbol.get("package"),
-                "file_path": symbol["file_path"],
-                "start_line": symbol["start_line"],
-                "end_line": symbol["end_line"],
-                "signature": symbol.get("signature"),
-                "exported": symbol.get("exported", False),
-                "is_test": symbol.get("is_test", False),
-                "is_generated": symbol.get("is_generated", False),
-            }
-        )
 
-    symbols.sort(key=lambda item: (item["file_path"], item["start_line"], item["qualified_name"]))
+def _build_code_outline(
+    go_symbols: dict[str, Any],
+    important_packages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    important_package_dirs = {package["dir_path"] for package in important_packages}
+    ranked_symbols = sorted(
+        go_symbols.get("symbols", []),
+        key=lambda symbol: (
+            not symbol.get("exported", False),
+            PurePosixPath(symbol.get("file_path", "")).parent.as_posix() not in important_package_dirs,
+            symbol.get("file_path", ""),
+            symbol.get("start_line", 0),
+            symbol.get("qualified_name", ""),
+        ),
+    )
+    important_symbols = [_compact_symbol(symbol) for symbol in ranked_symbols[:_MAX_IMPORTANT_SYMBOLS]]
+    symbols_total = go_symbols.get("summary", {}).get("symbols_total", len(go_symbols.get("symbols", [])))
+
     return {
         "summary": {
-            "symbols_total": len(symbols),
-            "kind_counts": dict(sorted(by_kind.items())),
-            "package_counts": dict(sorted(by_package.items())),
+            **go_symbols.get("summary", {}),
+            "important_symbols_total": len(important_symbols),
+            "important_symbols_omitted": max(0, symbols_total - len(important_symbols)),
         },
-        "symbols": symbols,
+        "important_symbols": important_symbols,
+    }
+
+
+def _compact_symbol(symbol: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol_id": symbol["symbol_id"],
+        "kind": symbol["kind"],
+        "qualified_name": symbol["qualified_name"],
+        "name": symbol["name"],
+        "package": symbol.get("package"),
+        "file_path": symbol["file_path"],
+        "start_line": symbol["start_line"],
+        "end_line": symbol["end_line"],
+        "signature": symbol.get("signature"),
+        "exported": symbol.get("exported", False),
     }
 
 
 def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, Any]:
+    env_vars = config_inventory.get("env_vars", [])
+    flags = config_inventory.get("flags", [])
+    config_structs = config_inventory.get("config_structs", [])
+    config_files = config_inventory.get("config_files", [])
     return {
         "summary": config_inventory.get("summary", {}),
-        "env_vars": config_inventory.get("env_vars", []),
-        "flags": config_inventory.get("flags", []),
-        "config_structs": config_inventory.get("config_structs", []),
-        "config_files": config_inventory.get("config_files", []),
+        "env_vars": _sample_config_items(env_vars, key="key"),
+        "env_vars_omitted": max(0, len(env_vars) - _MAX_CONFIG_ITEMS),
+        "flags": _sample_config_items(flags, key="name"),
+        "flags_omitted": max(0, len(flags) - _MAX_CONFIG_ITEMS),
+        "config_structs": _compact_config_structs(config_structs),
+        "config_structs_omitted": max(0, len(config_structs) - _MAX_CONFIG_ITEMS),
+        "config_files": _compact_config_files(config_files),
+        "config_files_omitted": max(0, len(config_files) - _MAX_CONFIG_ITEMS),
         "api_specs": config_inventory.get("api_specs", []),
     }
+
+
+def _sample_config_items(items: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
+    sampled = sorted(items, key=lambda item: (str(item.get(key, "")), _source_file_path(item)))[:_MAX_CONFIG_ITEMS]
+    compact: list[dict[str, Any]] = []
+    for item in sampled:
+        compact_item = {
+            key: item.get(key),
+            "required": item.get("required", False),
+            "source_file_path": _source_file_path(item),
+        }
+        if "default_value" in item:
+            compact_item["default_value"] = item.get("default_value")
+        if item.get("required_reason"):
+            compact_item["required_reason"] = item["required_reason"]
+        compact.append(compact_item)
+
+    return compact
+
+
+def _compact_config_structs(config_structs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in sorted(config_structs, key=lambda item: (_source_file_path(item), item.get("name", "")))[:_MAX_CONFIG_ITEMS]:
+        fields = item.get("fields", [])
+        compact.append(
+            {
+                "name": item.get("name"),
+                "fields_total": len(fields),
+                "required_fields_total": sum(1 for field in fields if field.get("required")),
+                "config_keys_total": sum(len(field.get("config_keys", [])) for field in fields),
+                "source_file_path": _source_file_path(item),
+            }
+        )
+
+    return compact
+
+
+def _compact_config_files(config_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in sorted(config_files, key=lambda item: item.get("path", ""))[:_MAX_CONFIG_ITEMS]:
+        compact.append(
+            {
+                "path": item.get("path"),
+                "format": item.get("format"),
+                "keys_total": len(item.get("keys", [])),
+                "parse_error": item.get("parse_error", False),
+                "truncated": item.get("truncated", False),
+                "truncation_reason": item.get("truncation_reason"),
+                "size_bytes": item.get("size_bytes", 0),
+                "line_count": item.get("line_count", 0),
+            }
+        )
+
+    return compact
+
+
+def _source_file_path(item: dict[str, Any]) -> str | None:
+    source = item.get("source")
+    return source.get("file_path") if isinstance(source, dict) else None
+
+
+def _build_workspace_units(
+    repo_root: Path,
+    *,
+    file_inventory: dict[str, Any],
+    package_graph: dict[str, Any],
+    http_surface: dict[str, Any],
+) -> list[dict[str, Any]]:
+    files = file_inventory.get("files", [])
+    units: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for module in _go_modules(package_graph):
+        root_path = module.get("root_dir") or "."
+        unit = _new_workspace_unit(
+            root_path=root_path,
+            unit_kind="backend",
+            roles=["backend"],
+            manifest_paths=[module.get("go_mod_path") or _join_path(root_path, "go.mod")],
+            ownership_mode="prefix",
+            languages=["go"],
+            frameworks=["go"],
+            name=module.get("path") or _unit_name_from_root(root_path),
+        )
+        unit["go"] = {
+            "module_path": module.get("path"),
+            "go_version": module.get("go_version"),
+            "toolchain": module.get("toolchain"),
+            "packages_total": 0,
+            "entrypoints": [],
+            "important_packages": [],
+        }
+        _add_unit(units, seen, unit)
+
+    for package_json_path in _manifest_paths(files, "package.json"):
+        root_path = _parent_dir(package_json_path)
+        manifest = _read_package_json(repo_root / package_json_path)
+        unit_files = _files_under_root(files, root_path)
+        js_summary = _javascript_summary(
+            root_path=root_path,
+            manifest=manifest,
+            files=unit_files,
+            repo_root=repo_root,
+        )
+        unit_kind = "frontend" if js_summary["is_frontend"] else "shared"
+        roles = ["frontend"] if unit_kind == "frontend" else ["shared"]
+        unit = _new_workspace_unit(
+            root_path=root_path,
+            unit_kind=unit_kind,
+            roles=roles,
+            manifest_paths=[package_json_path],
+            ownership_mode="prefix",
+            languages=js_summary["languages"],
+            frameworks=js_summary["frameworks"],
+            name=js_summary["package_name"] or _unit_name_from_root(root_path),
+        )
+        unit["javascript"] = js_summary
+        _add_unit(units, seen, unit)
+
+    infra_files = [file_record["path"] for file_record in files if _is_infra_file(file_record["path"])]
+    if infra_files:
+        unit = _new_workspace_unit(
+            root_path=".",
+            unit_kind="infra",
+            roles=["infra"],
+            manifest_paths=infra_files[:_MAX_UNIT_KEY_FILES],
+            ownership_mode="exact",
+            exact_file_paths=infra_files,
+            languages=[],
+            frameworks=_infra_frameworks(infra_files),
+            name="infra",
+        )
+        _add_unit(units, seen, unit)
+
+    docs_files = [
+        file_record["path"]
+        for file_record in files
+        if file_record["path"].startswith("docs/") or file_record.get("kind") == "api_spec"
+    ]
+    if docs_files:
+        docs_root = "docs" if any(path.startswith("docs/") for path in docs_files) else "."
+        unit = _new_workspace_unit(
+            root_path=docs_root,
+            unit_kind="docs",
+            roles=["docs"],
+            manifest_paths=[],
+            ownership_mode="prefix" if docs_root == "docs" else "exact",
+            exact_file_paths=docs_files if docs_root == "." else None,
+            languages=["markdown"] if any(path.lower().endswith((".md", ".mdx", ".rst")) for path in docs_files) else [],
+            frameworks=[],
+            name="docs",
+        )
+        _add_unit(units, seen, unit)
+
+    if not units:
+        _add_unit(
+            units,
+            seen,
+            _new_workspace_unit(
+                root_path=".",
+                unit_kind="shared",
+                roles=["shared"],
+                manifest_paths=[],
+                ownership_mode="prefix",
+                languages=_languages_for_files(files),
+                frameworks=[],
+                name="repository",
+            ),
+        )
+
+    _assign_workspace_unit_files(units, files)
+    _attach_go_packages_to_units(units, package_graph)
+    _attach_http_surface_to_units(units, http_surface)
+
+    for unit in units:
+        unit.pop("_ownership_mode", None)
+        unit.pop("_exact_file_paths", None)
+        unit["roles"] = sorted(set(unit["roles"]))
+        unit["languages"] = sorted(set(unit["languages"]))
+        unit["frameworks"] = sorted(set(unit["frameworks"]))
+        unit["manifest_paths"] = sorted(set(filter(None, unit["manifest_paths"])))
+        unit["key_files"] = sorted(unit["key_files"], key=lambda item: item["path"])[:_MAX_UNIT_KEY_FILES]
+
+    units.sort(key=lambda item: (item["root_path"] != ".", item["root_path"], item["unit_kind"]))
+    return units
+
+
+def _new_workspace_unit(
+    *,
+    root_path: str,
+    unit_kind: str,
+    roles: list[str],
+    manifest_paths: list[str | None],
+    ownership_mode: str,
+    languages: list[str],
+    frameworks: list[str],
+    name: str,
+    exact_file_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    root_path = _normalize_root_path(root_path)
+    return {
+        "workspace_unit_id": _workspace_unit_id(unit_kind, root_path),
+        "root_path": root_path,
+        "name": name,
+        "unit_kind": unit_kind,
+        "roles": roles,
+        "languages": languages,
+        "frameworks": frameworks,
+        "manifest_paths": [path for path in manifest_paths if path],
+        "key_files": [],
+        "file_counts": {
+            "files_total": 0,
+            "bytes_total": 0,
+            "by_owner": {},
+            "by_kind": {},
+            "by_extension": {},
+        },
+        "_ownership_mode": ownership_mode,
+        "_exact_file_paths": set(exact_file_paths or []),
+    }
+
+
+def _add_unit(units: list[dict[str, Any]], seen: set[tuple[str, str]], unit: dict[str, Any]) -> None:
+    key = (unit["unit_kind"], unit["root_path"])
+    if key in seen:
+        return
+
+    seen.add(key)
+    units.append(unit)
+
+
+def _assign_workspace_unit_files(units: list[dict[str, Any]], files: list[dict[str, Any]]) -> None:
+    for file_record in files:
+        unit = _unit_for_file(file_record["path"], units)
+        if unit is None:
+            continue
+
+        owner = _file_owner(file_record)
+        kind = file_record.get("kind", "other")
+        extension = PurePosixPath(file_record["path"]).suffix.lower() or "<none>"
+        unit["file_counts"]["files_total"] += 1
+        unit["file_counts"]["bytes_total"] += file_record.get("size_bytes", 0)
+        unit["file_counts"]["by_owner"] = _increment_count(unit["file_counts"]["by_owner"], owner)
+        unit["file_counts"]["by_kind"] = _increment_count(unit["file_counts"]["by_kind"], kind)
+        unit["file_counts"]["by_extension"] = _increment_count(unit["file_counts"]["by_extension"], extension)
+        if _is_key_file(file_record["path"], kind):
+            unit["key_files"].append(
+                {
+                    "path": file_record["path"],
+                    "kind": kind,
+                    "owner": owner,
+                    "size_bytes": file_record.get("size_bytes", 0),
+                    "line_count": file_record.get("line_count", 0),
+                }
+            )
+
+    for unit in units:
+        for count_key in ("by_owner", "by_kind", "by_extension"):
+            unit["file_counts"][count_key] = dict(sorted(unit["file_counts"][count_key].items()))
+
+
+def _unit_for_file(path: str, units: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = []
+    for unit in units:
+        if unit["_ownership_mode"] == "exact":
+            if path in unit["_exact_file_paths"]:
+                candidates.append((1000, len(unit["root_path"]), unit))
+            continue
+
+        if _path_under_root(path, unit["root_path"]):
+            priority = 900 if unit["unit_kind"] in {"docs", "infra"} else 500
+            candidates.append((priority, len(unit["root_path"]), unit))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]["workspace_unit_id"]), reverse=True)
+    return candidates[0][2]
+
+
+def _attach_go_packages_to_units(units: list[dict[str, Any]], package_graph: dict[str, Any]) -> None:
+    lookup = _build_workspace_unit_lookup(units)
+    packages_by_unit: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    entrypoints_by_unit: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for package in package_graph.get("packages", []):
+        unit_id = _workspace_unit_id_for_path(package.get("dir_path", "."), lookup)
+        if unit_id is not None:
+            packages_by_unit[unit_id].append(package)
+
+    for entrypoint in package_graph.get("entrypoints", []):
+        unit_id = _workspace_unit_id_for_path(entrypoint.get("dir_path", "."), lookup)
+        if unit_id is not None:
+            entrypoints_by_unit[unit_id].append(entrypoint)
+
+    for unit in units:
+        if unit["unit_kind"] != "backend" or "go" not in unit:
+            continue
+
+        packages = packages_by_unit.get(unit["workspace_unit_id"], [])
+        unit["go"]["packages_total"] = len(packages)
+        unit["go"]["entrypoints"] = sorted(
+            entrypoints_by_unit.get(unit["workspace_unit_id"], []),
+            key=lambda item: (item["dir_path"], item["package_id"]),
+        )
+        unit["go"]["important_packages"] = [
+            _compact_important_package(package, lookup) for package in _important_packages(packages)
+        ]
+
+
+def _attach_http_surface_to_units(units: list[dict[str, Any]], http_surface: dict[str, Any]) -> None:
+    lookup = _build_workspace_unit_lookup(units)
+    routes_by_unit: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for route in http_surface.get("routes", []):
+        unit_id = _workspace_unit_id_for_path(route.get("file_path", "."), lookup)
+        if unit_id is not None:
+            routes_by_unit[unit_id].append(route)
+
+    for unit in units:
+        routes = routes_by_unit.get(unit["workspace_unit_id"], [])
+        if routes:
+            unit["http_surface"] = {
+                "detected": True,
+                "frameworks": sorted({route.get("framework") for route in routes if route.get("framework")}),
+                "routes_total": len(routes),
+            }
+            unit["frameworks"].extend(unit["http_surface"]["frameworks"])
+
+
+def _build_workspace_unit_lookup(units: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "units": [
+            {
+                "workspace_unit_id": unit["workspace_unit_id"],
+                "root_path": unit["root_path"],
+                "unit_kind": unit["unit_kind"],
+            }
+            for unit in units
+            if unit["unit_kind"] not in {"infra", "docs"}
+        ]
+    }
+
+
+def _workspace_unit_id_for_path(path: str, workspace_unit_lookup: dict[str, Any]) -> str | None:
+    candidates = [
+        unit
+        for unit in workspace_unit_lookup.get("units", [])
+        if _path_under_root(path, unit["root_path"])
+    ]
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (len(item["root_path"]), item["workspace_unit_id"]), reverse=True)
+    return candidates[0]["workspace_unit_id"]
+
+
+def _manifest_paths(files: list[dict[str, Any]], name: str) -> list[str]:
+    return sorted(file_record["path"] for file_record in files if PurePosixPath(file_record["path"]).name == name)
+
+
+def _files_under_root(files: list[dict[str, Any]], root_path: str) -> list[dict[str, Any]]:
+    return [file_record for file_record in files if _path_under_root(file_record["path"], root_path)]
+
+
+def _read_package_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+    return value if isinstance(value, dict) else {}
+
+
+def _javascript_summary(
+    *,
+    root_path: str,
+    manifest: dict[str, Any],
+    files: list[dict[str, Any]],
+    repo_root: Path,
+) -> dict[str, Any]:
+    dependencies = _package_dependencies(manifest)
+    frameworks = _javascript_frameworks(dependencies, files)
+    languages = _languages_for_files(files)
+    package_manager = _package_manager_for_root(repo_root, root_path)
+    scripts = _package_scripts(manifest)
+    frontend_hints = _frontend_hints(root_path, files)
+    is_frontend = bool(frameworks.intersection({"react", "vue", "next", "nuxt", "svelte", "angular", "vite"}))
+    is_frontend = is_frontend or bool(frontend_hints["route_directories"] or frontend_hints["component_directories"])
+
+    return {
+        "package_name": manifest.get("name"),
+        "package_manager": package_manager,
+        "languages": sorted(languages or {"javascript"}),
+        "frameworks": sorted(frameworks),
+        "is_frontend": is_frontend,
+        "scripts": scripts,
+        "dependency_hints": _dependency_hints(dependencies),
+        **frontend_hints,
+    }
+
+
+def _package_dependencies(manifest: dict[str, Any]) -> dict[str, str]:
+    dependencies: dict[str, str] = {}
+    for section in ("dependencies", "devDependencies", "peerDependencies"):
+        section_value = manifest.get(section)
+        if isinstance(section_value, dict):
+            dependencies.update({str(key): str(value) for key, value in section_value.items()})
+
+    return dict(sorted(dependencies.items()))
+
+
+def _javascript_frameworks(dependencies: dict[str, str], files: list[dict[str, Any]]) -> set[str]:
+    names = set(dependencies)
+    frameworks: set[str] = set()
+    framework_map = {
+        "@angular/core": "angular",
+        "@sveltejs/kit": "svelte",
+        "@vitejs/plugin-react": "vite",
+        "next": "next",
+        "nuxt": "nuxt",
+        "react": "react",
+        "svelte": "svelte",
+        "vite": "vite",
+        "vue": "vue",
+    }
+    for dependency, framework in framework_map.items():
+        if dependency in names:
+            frameworks.add(framework)
+
+    paths = {file_record["path"].lower() for file_record in files}
+    if any("/vite.config." in f"/{path}" for path in paths):
+        frameworks.add("vite")
+    if any("/next.config." in f"/{path}" for path in paths):
+        frameworks.add("next")
+    if any("/nuxt.config." in f"/{path}" for path in paths):
+        frameworks.add("nuxt")
+    if any("/svelte.config." in f"/{path}" for path in paths):
+        frameworks.add("svelte")
+    if any("/angular.json" in f"/{path}" for path in paths):
+        frameworks.add("angular")
+
+    return frameworks
+
+
+def _package_manager_for_root(repo_root: Path, root_path: str) -> str | None:
+    root = repo_root if root_path == "." else repo_root / root_path
+    if (root / "pnpm-lock.yaml").exists() or (repo_root / "pnpm-workspace.yaml").exists():
+        return "pnpm"
+    if (root / "yarn.lock").exists():
+        return "yarn"
+    if (root / "package-lock.json").exists():
+        return "npm"
+    if (root / "bun.lockb").exists():
+        return "bun"
+    return None
+
+
+def _package_scripts(manifest: dict[str, Any]) -> list[dict[str, str]]:
+    scripts = manifest.get("scripts")
+    if not isinstance(scripts, dict):
+        return []
+
+    preferred = ("dev", "start", "build", "test", "lint", "preview", "typecheck")
+    items = [
+        {"name": name, "command": str(scripts[name])}
+        for name in preferred
+        if name in scripts
+    ]
+    remaining = [
+        {"name": str(name), "command": str(command)}
+        for name, command in sorted(scripts.items())
+        if name not in preferred
+    ]
+    return (items + remaining)[:10]
+
+
+def _dependency_hints(dependencies: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"name": name, "version": version}
+        for name, version in sorted(dependencies.items())[:_MAX_DEPENDENCY_HINTS]
+    ]
+
+
+def _frontend_hints(root_path: str, files: list[dict[str, Any]]) -> dict[str, list[str]]:
+    directories = {_parent_dir(file_record["path"]) for file_record in files}
+    route_dirs = _matching_dirs(root_path, directories, {"app", "pages", "routes"})
+    component_dirs = _matching_dirs(root_path, directories, {"components"})
+    api_client_dirs = _matching_dirs(root_path, directories, {"api", "client", "clients"})
+    generated_sdk_dirs = [
+        directory
+        for directory in sorted(directories)
+        if any(part in {"generated", "sdk"} for part in PurePosixPath(directory).parts)
+        and _path_under_root(directory, root_path)
+    ]
+    return {
+        "route_directories": route_dirs[:_MAX_UNIT_KEY_FILES],
+        "component_directories": component_dirs[:_MAX_UNIT_KEY_FILES],
+        "api_client_directories": api_client_dirs[:_MAX_UNIT_KEY_FILES],
+        "generated_sdk_directories": generated_sdk_dirs[:_MAX_UNIT_KEY_FILES],
+    }
+
+
+def _matching_dirs(root_path: str, directories: set[str], names: set[str]) -> list[str]:
+    matched = []
+    for directory in sorted(directories):
+        if not _path_under_root(directory, root_path):
+            continue
+
+        parts = set(PurePosixPath(directory).parts)
+        if parts.intersection(names):
+            matched.append(directory)
+
+    return matched
+
+
+def _languages_for_files(files: list[dict[str, Any]]) -> list[str]:
+    languages = set()
+    for file_record in files:
+        path = file_record["path"].lower()
+        suffix = PurePosixPath(path).suffix
+        if suffix == ".go":
+            languages.add("go")
+        elif suffix in {".ts", ".tsx"}:
+            languages.add("typescript")
+        elif suffix in {".js", ".jsx", ".mjs", ".cjs"}:
+            languages.add("javascript")
+        elif suffix in {".css", ".scss", ".sass", ".less"}:
+            languages.add("css")
+        elif suffix in {".html", ".vue", ".svelte"}:
+            languages.add("markup")
+        elif suffix in {".md", ".mdx", ".rst"}:
+            languages.add("markdown")
+        elif suffix in {".yaml", ".yml", ".json", ".toml", ".ini", ".env"}:
+            languages.add("configuration")
+
+    return sorted(languages)
+
+
+def _is_infra_file(path: str) -> bool:
+    pure_path = PurePosixPath(path)
+    lower_name = pure_path.name.lower()
+    lower_parts = {part.lower() for part in pure_path.parts}
+    return (
+        lower_name == "dockerfile"
+        or lower_name.startswith("dockerfile.")
+        or lower_name.startswith("docker-compose")
+        or lower_name in {"compose.yaml", "compose.yml", "makefile"}
+        or bool(lower_parts.intersection({".github", "deploy", "deployment", "k8s", "kubernetes", "terraform"}))
+    )
+
+
+def _infra_frameworks(paths: list[str]) -> list[str]:
+    frameworks = set()
+    for path in paths:
+        lower_name = PurePosixPath(path).name.lower()
+        lower_parts = {part.lower() for part in PurePosixPath(path).parts}
+        if "docker" in lower_name or lower_name.startswith("compose"):
+            frameworks.add("docker")
+        if lower_name == "makefile":
+            frameworks.add("make")
+        if lower_parts.intersection({"k8s", "kubernetes"}):
+            frameworks.add("kubernetes")
+        if "terraform" in lower_parts:
+            frameworks.add("terraform")
+        if ".github" in lower_parts:
+            frameworks.add("github_actions")
+
+    return sorted(frameworks)
+
+
+def _file_owner(file_record: dict[str, Any]) -> str:
+    path = file_record["path"]
+    kind = file_record.get("kind")
+    if file_record.get("is_vendor") or kind == "vendor":
+        return "vendor"
+    if file_record.get("is_generated") or file_record.get("is_generated_doc") or kind in {"generated", "api_spec"}:
+        return "generated"
+    if file_record.get("is_test") or kind == "test":
+        return "test"
+    if _is_infra_file(path):
+        return "infra"
+    if path.startswith("docs/") or kind == "markdown":
+        return "docs"
+    if path.endswith(".go"):
+        return "backend"
+    if PurePosixPath(path).suffix.lower() in {
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".html",
+        ".vue",
+        ".svelte",
+    }:
+        return "frontend"
+    return "shared"
+
+
+def _increment_count(counter: dict[str, int], key: str) -> dict[str, int]:
+    counter[key] = counter.get(key, 0) + 1
+    return counter
+
+
+def _workspace_unit_id(unit_kind: str, root_path: str) -> str:
+    normalized_root = "root" if root_path == "." else root_path.strip("/").replace("/", "-")
+    return f"{unit_kind}:{normalized_root}"
+
+
+def _normalize_root_path(root_path: str) -> str:
+    normalized = root_path.strip("/")
+    return normalized or "."
+
+
+def _path_under_root(path: str, root_path: str) -> bool:
+    root_path = _normalize_root_path(root_path)
+    if root_path == ".":
+        return True
+
+    return path == root_path or path.startswith(f"{root_path}/")
+
+
+def _parent_dir(path: str) -> str:
+    parent = PurePosixPath(path).parent.as_posix()
+    return "." if parent == "." else parent
+
+
+def _join_path(root_path: str, name: str) -> str:
+    return name if root_path == "." else f"{root_path}/{name}"
+
+
+def _unit_name_from_root(root_path: str) -> str:
+    return "repository" if root_path == "." else PurePosixPath(root_path).name
+
+
+def _attach_budget_metadata(
+    document: dict[str, Any],
+    *,
+    file_inventory: dict[str, Any],
+    go_symbols: dict[str, Any],
+    package_graph: dict[str, Any],
+    config_inventory: dict[str, Any],
+) -> None:
+    source_config_keys = sum(len(item.get("keys", [])) for item in config_inventory.get("config_files", []))
+    important_packages_total = len(document["go"]["important_packages"])
+    important_symbols_total = len(document["code_outline"]["important_symbols"])
+    omitted_sections = [
+        {
+            "source": "file_inventory.files",
+            "items_total": len(file_inventory.get("files", [])),
+            "reason": "project_model_v2_keeps_layout_counts_and_key_files_only",
+        },
+        {
+            "source": "package_graph.packages",
+            "items_total": len(package_graph.get("packages", [])),
+            "items_included": important_packages_total,
+            "reason": "project_model_v2_keeps_important_packages_only",
+        },
+        {
+            "source": "package_graph.edges",
+            "items_total": len(package_graph.get("edges", [])),
+            "reason": "project_model_v2_keeps_dependency_summary_only",
+        },
+        {
+            "source": "go_symbols.symbols",
+            "items_total": go_symbols.get("summary", {}).get("symbols_total", len(go_symbols.get("symbols", []))),
+            "items_included": important_symbols_total,
+            "reason": "project_model_v2_keeps_important_symbols_only",
+        },
+        {
+            "source": "config_inventory.config_files.keys",
+            "items_total": source_config_keys,
+            "reason": "project_model_v2_keeps_config_file_key_counts_only",
+        },
+    ]
+    truncation_reasons = [
+        item["reason"]
+        for item in omitted_sections
+        if item.get("items_total", 0) > item.get("items_included", 0)
+    ]
+    document["budget"] = {
+        "estimated_document_bytes": 0,
+        "estimated_document_tokens": 0,
+        "estimation": "rough_bytes_div_4",
+        "limits": {
+            "max_important_packages": _MAX_IMPORTANT_PACKAGES,
+            "max_important_symbols": _MAX_IMPORTANT_SYMBOLS,
+            "max_config_items_per_section": _MAX_CONFIG_ITEMS,
+            "max_key_files": _MAX_KEY_FILES,
+            "max_workspace_unit_key_files": _MAX_UNIT_KEY_FILES,
+        },
+        "omitted_sections": omitted_sections,
+        "truncation_reasons": sorted(set(truncation_reasons)),
+    }
+    for _ in range(3):
+        payload = (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        estimated_bytes = len(payload)
+        estimated_tokens = max(1, estimated_bytes // 4)
+        if (
+            document["budget"]["estimated_document_bytes"] == estimated_bytes
+            and document["budget"]["estimated_document_tokens"] == estimated_tokens
+        ):
+            break
+
+        document["budget"]["estimated_document_bytes"] = estimated_bytes
+        document["budget"]["estimated_document_tokens"] = estimated_tokens
 
 
 def _detect_external_integrations(

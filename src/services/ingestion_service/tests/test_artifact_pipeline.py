@@ -123,7 +123,7 @@ type Service struct{}
         {"artifact_kind": "go_symbols", "row_count": 3, "schema_version": 1},
         {"artifact_kind": "package_graph", "row_count": 2, "schema_version": 1},
         {"artifact_kind": "config_inventory", "row_count": 0, "schema_version": 1},
-        {"artifact_kind": "project_model", "row_count": 3, "schema_version": 1},
+        {"artifact_kind": "project_model", "row_count": 1, "schema_version": 2},
         {"artifact_kind": "commit_log", "row_count": 1, "schema_version": 1},
     ]
     assert result.finalizing_payload == {

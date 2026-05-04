@@ -506,6 +506,7 @@
 ### INGEST-015 — Сжать `project_model.json` до LLM-friendly summary model
 - Priority: `P0`
 - Depends on: `INGEST-007`, `INGEST-014`
+- Status: `completed`
 - Goal: `project_model` должен быть compact overview artifact, а не дублировать все подробные inventories.
 - Tasks:
 - спроектировать совместимый schema-v2 или explicit compact view для `project_model`;
@@ -520,6 +521,7 @@
 ### INGEST-016 — Добавить language-neutral monorepo workspace model
 - Priority: `P0`
 - Depends on: `INGEST-003`, `INGEST-005`, `INGEST-015`
+- Status: `completed`
 - Goal: корректно описывать monorepo и multi-language repositories без написания tree-sitter парсера под каждый язык.
 - Tasks:
 - выделить workspace units/apps/packages по manifests и lockfiles: `go.mod`, `package.json`, `pnpm-workspace.yaml`, `yarn.lock`, `package-lock.json`, `vite/next/nuxt/svelte/angular` hints, `Dockerfile`, compose, Makefile;
