@@ -28,6 +28,19 @@ _CONFIG_EXTENSIONS = {
     ".xml",
 }
 _CONFIG_FILENAMES = {"dockerfile", "makefile", ".gitignore", ".editorconfig", ".env", ".env.example"}
+_LOCKFILE_FILENAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "pnpm-lock.yml",
+    "bun.lockb",
+    "bun.lock",
+    "go.sum",
+    "cargo.lock",
+    "poetry.lock",
+    "pipfile.lock",
+}
 _API_SPEC_FILENAMES = {
     "api-docs.json",
     "api-docs.yaml",
@@ -141,6 +154,8 @@ def _classify_file(path: str, raw: bytes, is_binary: bool) -> tuple[str, dict[st
         kind = "generated"
     elif is_test:
         kind = "test"
+    elif lower_name in _LOCKFILE_FILENAMES:
+        kind = "dependency_lock"
     elif lower_path.endswith(".go"):
         kind = "go"
     elif pure_path.suffix.lower() in _MARKDOWN_EXTENSIONS or lower_name.startswith("readme"):

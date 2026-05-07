@@ -554,6 +554,7 @@
 ### INGEST-018 — Уточнить extraction env/flag/config keys в Go коде
 - Priority: `P0`
 - Depends on: `INGEST-006`, `INGEST-017`
+- Status: `completed`
 - Goal: убрать false positives вроде dynamic env expressions и одновременно сохранить полезные runtime config hints.
 - Tasks:
 - считать high-confidence env/flag key только из string literals или надежно inferred wrapper calls;
@@ -569,6 +570,7 @@
 ### INGEST-019 — Отделить DTO/API models от runtime config structs
 - Priority: `P0`
 - Depends on: `INGEST-006`, `INGEST-014`, `INGEST-017`
+- Status: `completed`
 - Goal: не считать request/response DTO, claims и persistence models runtime-конфигурацией приложения.
 - Tasks:
 - классифицировать structs по path/name/tags/import context как `runtime_config`, `api_contract`, `persistence_model`, `auth_claims`, `unknown`;
@@ -584,6 +586,7 @@
 ### INGEST-020 — Заменить ad-hoc YAML/config flattening и отдельно обрабатывать lockfiles
 - Priority: `P0`
 - Depends on: `INGEST-014`, `INGEST-017`
+- Status: `completed`
 - Goal: сделать config inventory точнее на GitHub workflows, Dependabot, Swagger YAML и JS lockfiles.
 - Tasks:
 - перейти на structured YAML parsing или array-aware flattening для `*.yml/*.yaml`;

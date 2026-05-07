@@ -166,6 +166,12 @@ APP_TOKEN=example-token
         "config_files_truncated_total": 1,
         "config_structs_total": 1,
         "configuration_items_total": 272,
+        "data_contract_kind_counts": {},
+        "data_contracts_total": 0,
+        "dependency_lock_kind_counts": {},
+        "dependency_locks_total": 0,
+        "dynamic_env_references_total": 0,
+        "dynamic_flag_references_total": 0,
         "env_vars_total": 2,
         "flags_total": 3,
         "required_items_total": 4,
@@ -179,6 +185,10 @@ APP_TOKEN=example-token
             "api_specs": {"generated": 1},
             "config_files": {"runtime": 5},
             "config_structs": {"runtime": 1},
+            "data_contracts": {},
+            "dependency_locks": {},
+            "dynamic_env_references": {},
+            "dynamic_flag_references": {},
             "env_vars": {"runtime": 2},
             "flags": {"runtime": 3},
         },
@@ -202,6 +212,7 @@ APP_TOKEN=example-token
 
     config_struct = document["config_structs"][0]
     assert config_struct["name"] == "AppConfig"
+    assert config_struct["model_kind"] == "runtime_config"
     assert config_struct["source"]["symbol_qualified_name"] == "main.AppConfig"
     assert config_struct["source_scope"] == "runtime"
     fields_by_name = {item["name"]: item for item in config_struct["fields"]}
@@ -257,6 +268,152 @@ APP_TOKEN=example-token
     ]
 
 
+def test_build_config_inventory_artifact_tracks_dynamic_env_and_data_contracts(tmp_path: Path) -> None:
+    _write_text(
+        tmp_path / "main.go",
+        """package main
+
+import (
+    "flag"
+    "os"
+)
+
+type RuntimeConfig struct {
+    Host string `yaml:"host" default:"localhost"`
+}
+
+type LoginRequest struct {
+    Email string `json:"email" binding:"required"`
+}
+
+type User struct {
+    ID string `json:"id" gorm:"primaryKey"`
+}
+
+type Claims struct {
+    Role string `json:"role"`
+}
+
+func getEnv(key string, fallback string) string {
+    if value := os.Getenv(key); value != "" {
+        return value
+    }
+    return fallback
+}
+
+func main() {
+    flagName := "debug"
+    _ = os.Getenv(activeHelpEnvVar("cobra"))
+    _ = getEnv("PORT", "8080")
+    _ = getEnv(flagName, "fallback")
+    _ = flag.String(flagName, "", "dynamic flag")
+    _ = flag.String("static", "", "static flag")
+}
+""",
+    )
+
+    document = _build_config_inventory_document(tmp_path)
+
+    env_vars = {item["key"]: item for item in document["env_vars"]}
+    assert set(env_vars) == {"PORT"}
+    assert env_vars["PORT"]["accessor"] == "getEnv"
+    assert env_vars["PORT"]["default_value"] == "8080"
+    assert env_vars["PORT"]["confidence"] == "medium"
+
+    dynamic_env_refs = {item["expression"]: item for item in document["dynamic_env_references"]}
+    assert set(dynamic_env_refs) == {'activeHelpEnvVar("cobra")', "flagName"}
+    assert all(item["kind"] == "dynamic_env_reference" for item in dynamic_env_refs.values())
+
+    flags = {item["name"]: item for item in document["flags"]}
+    assert set(flags) == {"static"}
+    assert document["dynamic_flag_references"][0]["expression"] == "flagName"
+
+    config_structs = {item["name"]: item for item in document["config_structs"]}
+    assert set(config_structs) == {"RuntimeConfig"}
+    assert config_structs["RuntimeConfig"]["model_kind"] == "runtime_config"
+
+    data_contracts = {item["name"]: item for item in document["data_contracts"]}
+    assert data_contracts["LoginRequest"]["model_kind"] == "api_contract"
+    assert data_contracts["User"]["model_kind"] == "persistence_model"
+    assert data_contracts["Claims"]["model_kind"] == "auth_claims"
+    assert document["summary"]["runtime_configuration_items_total"] == 3
+    assert document["summary"]["data_contract_kind_counts"] == {
+        "api_contract": 1,
+        "auth_claims": 1,
+        "persistence_model": 1,
+    }
+
+
+def test_build_config_inventory_artifact_parses_yaml_arrays_and_excludes_lockfiles(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / ".github" / "labeler.yml",
+        """area/docs:
+  - docs/**/*
+area/backend:
+  - internal/**/*
+""",
+    )
+    _write_text(
+        tmp_path / ".github" / "dependabot.yml",
+        """version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /
+""",
+    )
+    _write_text(
+        tmp_path / "frontend" / "package-lock.json",
+        json.dumps(
+            {
+                "name": "frontend",
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "frontend"},
+                    "node_modules/react": {"version": "19.0.0"},
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    _write_text(
+        tmp_path / "go.sum",
+        """github.com/pkg/errors v0.9.1 h1:abc
+github.com/pkg/errors v0.9.1/go.mod h1:def
+""",
+    )
+
+    document = _build_config_inventory_document(tmp_path)
+    config_files = {item["path"]: item for item in document["config_files"]}
+    assert set(config_files) == {".github/dependabot.yml", ".github/labeler.yml"}
+    assert "frontend/package-lock.json" not in config_files
+
+    labeler_keys = {item["key"]: item for item in config_files[".github/labeler.yml"]["keys"]}
+    assert labeler_keys["area/backend[0]"]["value_preview"] == "internal/**/*"
+    assert labeler_keys["area/docs[0]"]["value_preview"] == "docs/**/*"
+
+    dependabot_keys = {item["key"]: item for item in config_files[".github/dependabot.yml"]["keys"]}
+    assert dependabot_keys["updates[0].package-ecosystem"]["value_preview"] == "npm"
+    assert dependabot_keys["updates[0].schedule.interval"]["value_preview"] == "weekly"
+    assert dependabot_keys["updates[1].directory"]["value_preview"] == "/"
+
+    locks = {item["path"]: item for item in document["dependency_locks"]}
+    assert locks["frontend/package-lock.json"]["lockfile_kind"] == "npm_package_lock"
+    assert locks["frontend/package-lock.json"]["dependencies_total"] == 1
+    assert locks["go.sum"]["lockfile_kind"] == "go_sum"
+    assert locks["go.sum"]["dependencies_total"] == 1
+    assert document["summary"]["dependency_lock_kind_counts"] == {
+        "go_sum": 1,
+        "npm_package_lock": 1,
+    }
+
+
 def _commit_all(repo: Repo, repo_root: Path) -> None:
     paths = [
         str(path.relative_to(repo_root))
@@ -266,6 +423,52 @@ def _commit_all(repo: Repo, repo_root: Path) -> None:
     repo.index.add(paths)
     actor = Actor("DopDoc", "dopdoc@example.com")
     repo.index.commit("init", author=actor, committer=actor)
+
+
+def _build_config_inventory_document(repo_root: Path) -> dict[str, object]:
+    repo = Repo.init(repo_root)
+    _commit_all(repo, repo_root)
+    commit = repo.head.commit
+    metadata = {
+        "branch_name": "main",
+        "commit_sha": commit.hexsha.lower(),
+        "tree_hash": commit.tree.hexsha.lower(),
+        "go_files_total": sum(
+            1
+            for path in repo_root.rglob("*.go")
+            if path.is_file() and ".git" not in path.parts
+        ),
+        "readme_files_total": 0,
+        "bytes_total": sum(
+            path.stat().st_size
+            for path in repo_root.rglob("*")
+            if path.is_file() and ".git" not in path.parts
+        ),
+    }
+    metadata["files_total"] = len(
+        [path for path in repo_root.rglob("*") if path.is_file() and ".git" not in path.parts]
+    )
+    file_inventory = build_file_inventory_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+    go_symbols = build_go_symbols_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+    )
+    artifact = build_config_inventory_artifact(
+        repo_root,
+        repository_id="repo-id",
+        snapshot_id="snapshot-id",
+        snapshot_metadata=metadata,
+        file_inventory_artifact=file_inventory,
+        go_symbols_artifact=go_symbols,
+    )
+    return json.loads(artifact.payload.decode("utf-8"))
 
 
 def _write_text(path: Path, content: str) -> None:

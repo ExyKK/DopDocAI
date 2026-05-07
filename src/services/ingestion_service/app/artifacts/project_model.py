@@ -125,6 +125,8 @@ def build_project_model_artifact(
         ),
         "config_files_total": config_inventory.get("summary", {}).get("config_files_total", 0),
         "api_specs_total": config_inventory.get("summary", {}).get("api_specs_total", 0),
+        "data_contracts_total": config_inventory.get("summary", {}).get("data_contracts_total", 0),
+        "dependency_locks_total": config_inventory.get("summary", {}).get("dependency_locks_total", 0),
         "external_integrations_total": len(external_integrations),
         "http_surface_detected": http_surface["detected"],
         "http_routes_total": len(http_surface["routes"]),
@@ -448,7 +450,9 @@ def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, An
     env_vars = config_inventory.get("env_vars", [])
     flags = config_inventory.get("flags", [])
     config_structs = config_inventory.get("config_structs", [])
+    data_contracts = config_inventory.get("data_contracts", [])
     config_files = config_inventory.get("config_files", [])
+    dependency_locks = config_inventory.get("dependency_locks", [])
     primary_config_scopes = {SOURCE_SCOPE_RUNTIME, SOURCE_SCOPE_INFRA}
     runtime_env_vars = [item for item in env_vars if item.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME]
     runtime_flags = [item for item in flags if item.get("source_scope", SOURCE_SCOPE_RUNTIME) == SOURCE_SCOPE_RUNTIME]
@@ -469,9 +473,13 @@ def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, An
         "config_structs": _compact_config_structs(runtime_config_structs),
         "config_structs_omitted": max(0, len(runtime_config_structs) - _MAX_CONFIG_ITEMS),
         "non_runtime_config_structs_total": max(0, len(config_structs) - len(runtime_config_structs)),
+        "data_contracts": _compact_data_contracts(data_contracts),
+        "data_contracts_omitted": max(0, len(data_contracts) - _MAX_CONFIG_ITEMS),
         "config_files": _compact_config_files(primary_config_files),
         "config_files_omitted": max(0, len(primary_config_files) - _MAX_CONFIG_ITEMS),
         "non_primary_config_files_total": max(0, len(config_files) - len(primary_config_files)),
+        "dependency_locks": _compact_dependency_locks(dependency_locks),
+        "dependency_locks_omitted": max(0, len(dependency_locks) - _MAX_CONFIG_ITEMS),
         "api_specs": config_inventory.get("api_specs", []),
     }
 
@@ -513,6 +521,24 @@ def _compact_config_structs(config_structs: list[dict[str, Any]]) -> list[dict[s
     return compact
 
 
+def _compact_data_contracts(data_contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in sorted(data_contracts, key=lambda item: (_source_file_path(item), item.get("name", "")))[:_MAX_CONFIG_ITEMS]:
+        fields = item.get("fields", [])
+        compact.append(
+            {
+                "name": item.get("name"),
+                "model_kind": item.get("model_kind"),
+                "fields_total": len(fields),
+                "contract_keys_total": sum(len(field.get("contract_keys", [])) for field in fields),
+                "source_file_path": _source_file_path(item),
+                "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
+            }
+        )
+
+    return compact
+
+
 def _compact_config_files(config_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     compact = []
     for item in sorted(config_files, key=lambda item: item.get("path", ""))[:_MAX_CONFIG_ITEMS]:
@@ -524,6 +550,25 @@ def _compact_config_files(config_files: list[dict[str, Any]]) -> list[dict[str, 
                 "parse_error": item.get("parse_error", False),
                 "truncated": item.get("truncated", False),
                 "truncation_reason": item.get("truncation_reason"),
+                "size_bytes": item.get("size_bytes", 0),
+                "line_count": item.get("line_count", 0),
+                "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
+            }
+        )
+
+    return compact
+
+
+def _compact_dependency_locks(dependency_locks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in sorted(dependency_locks, key=lambda item: item.get("path", ""))[:_MAX_CONFIG_ITEMS]:
+        compact.append(
+            {
+                "path": item.get("path"),
+                "lockfile_kind": item.get("lockfile_kind"),
+                "package_manager": item.get("package_manager"),
+                "dependencies_total": item.get("dependencies_total", 0),
+                "truncated": item.get("truncated", False),
                 "size_bytes": item.get("size_bytes", 0),
                 "line_count": item.get("line_count", 0),
                 "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
