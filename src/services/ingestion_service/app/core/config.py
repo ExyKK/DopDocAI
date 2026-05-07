@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     qdrant_url: AnyUrl = "http://localhost:6333"
     qdrant_api_key: str | None = None
+    qdrant_code_chunks_collection: str = "code_chunks_v1"
+    embedding_vector_size: int = 896
 
     s3_endpoint: AnyUrl = Field(
         default="http://localhost:9000",
@@ -45,17 +47,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("INGEST_S3_UPLOAD_RETRY_DELAY_S", "DOPDOC_S3_UPLOAD_RETRY_DELAY_S"),
     )
 
-    jina_model: str = "jinaai/jina-code-embeddings-0.5b"
-
-    max_tokens: int = 512
-    overlap: int = 64
-    vector_size: int = 896
-    qdrant_batch_size: int = 64
-
     host: str = "127.0.0.1"
     port: int = 19100
     reload: bool = False
-    enable_legacy_rag: bool = False
 
     worker_id: str | None = None
     worker_poll_interval_s: float = 5.0

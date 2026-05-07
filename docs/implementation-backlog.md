@@ -602,7 +602,7 @@
 
 ### INGEST-021 — Сжать `project_model` v2.1 и уточнить workspace ownership
 - Priority: `P0`
-- Status: completed
+- Status: `completed`
 - Depends on: `INGEST-015`, `INGEST-016`, `INGEST-017`
 - Goal: удержать `project_model` в разумном LLM planning budget на средних monorepo.
 - Tasks:
@@ -620,7 +620,7 @@
 
 ### INGEST-022 — Укрепить HTTP route extraction against non-router method calls
 - Priority: `P0`
-- Status: completed
+- Status: `completed`
 - Depends on: `INGEST-013`, `INGEST-016`, `INGEST-017`
 - Goal: убрать ложные routes из обычных method calls вроде `Header.Get`, `gin.Context.Get` и context helpers.
 - Tasks:
@@ -653,6 +653,7 @@
 
 ### RAG-001 — Выбрать модель хранения в Qdrant
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `INGEST-002`, `INGEST-016`, `INGEST-017`, `INGEST-021`
 - Goal: перейти от коллекции на repo к коллекции на schema/version.
 - Tasks:
@@ -1069,7 +1070,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`. Artifact-quality слой перед `RAG-001` закрыт; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыт `RAG-001`. Следующий RAG-срез начинается с chunking/upsert (`RAG-002`/`RAG-003`); `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
