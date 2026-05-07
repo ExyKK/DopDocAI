@@ -144,6 +144,8 @@ database:
     assert artifact_one.storage_key.endswith("/analysis/project_model.schema-v2.json")
 
     document = json.loads(artifact_one.payload.decode("utf-8"))
+    assert document["schema_version"] == 2
+    assert document["model_revision"] == "2.1"
     assert document["model_kind"] == "compact_project_manifest"
     assert document["summary"]["bytes_total"] > 0
     assert {
@@ -386,6 +388,7 @@ func Health() {}
             "reason": "route path is not a string literal",
             "runtime_scope": True,
             "source_scope": "runtime",
+            "workspace_unit_id": "backend:root",
         }
     ]
 
@@ -543,6 +546,210 @@ func main() {
     assert units["docs:docs"]["file_counts"]["by_owner"] == {"docs": 1}
     assert document["go"]["important_packages"][0]["workspace_unit_id"] == "backend:backend"
     assert document["summary"]["workspace_units_total"] == 4
+
+
+def test_build_project_model_artifact_compacts_workspace_units_and_ownership(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / "backend" / "go.mod",
+        """module github.com/acme/backend
+
+go 1.22
+require github.com/gin-gonic/gin v1.10.0
+""",
+    )
+    _write_text(
+        tmp_path / "backend" / "cmd" / "api" / "main.go",
+        """package main
+
+import "github.com/gin-gonic/gin"
+
+func main() {
+    router := gin.Default()
+    router.GET("/health", func(ctx *gin.Context) {})
+}
+""",
+    )
+    for index in range(24):
+        _write_text(
+            tmp_path / "backend" / "internal" / f"pkg{index:02d}" / "service.go",
+            f"""package pkg{index:02d}
+
+func Service{index:02d}() string {{
+    return "pkg{index:02d}"
+}}
+""",
+        )
+
+    _write_text(
+        tmp_path / "backend" / "docs" / "openapi.yaml",
+        """openapi: 3.0.0
+info:
+  title: Backend API
+  version: v1
+paths:
+  /health:
+    get:
+      responses:
+        '200':
+          description: ok
+""",
+    )
+    _write_text(tmp_path / "backend" / "migrations" / "001_init.sql", "create table posts(id text primary key);\n")
+    _write_text(tmp_path / ".gitlab-ci.yml", "stages: [test]\n")
+    _write_text(tmp_path / "infrastructure" / "dev-stack.yml", "services: {}\n")
+    _write_text(
+        tmp_path / "frontend" / "package.json",
+        json.dumps(
+            {
+                "name": "@acme/web",
+                "scripts": {f"task{i:02d}": f"vite task{i:02d}" for i in range(12)},
+                "dependencies": {"@vitejs/plugin-react": "^5.0.0", "react": "^19.0.0", "vite": "^6.0.0"},
+            }
+        ),
+    )
+    _write_text(tmp_path / "frontend" / "src" / "services" / "api.ts", "export const api = {}\n")
+    _write_text(tmp_path / "frontend" / "src" / "http" / "client.ts", "export const http = {}\n")
+    _write_text(tmp_path / "frontend" / "src" / "generated" / "sdk" / "client.ts", "export const sdk = {}\n")
+    _write_text(tmp_path / "site" / "index.md", "# Site\n")
+    _write_text(tmp_path / "static" / "logo.svg", "<svg />\n")
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+    metadata = _snapshot_metadata(tmp_path, repo)
+
+    document = _build_project_model_document(tmp_path, metadata)
+    units = {item["workspace_unit_id"]: item for item in document["workspace_units"]}
+
+    assert {"assets:static", "backend:backend", "database:root", "docs:site", "frontend:frontend", "infra:root"} <= set(units)
+    assert "docs:root" not in units
+    assert units["database:root"]["file_counts"]["by_owner"] == {"database": 1}
+    assert units["assets:static"]["file_counts"]["by_owner"] == {"assets": 1}
+    assert units["docs:site"]["file_counts"]["by_owner"] == {"docs": 1}
+    assert units["infra:root"]["file_counts"]["by_owner"] == {"infra": 2}
+
+    backend = units["backend:backend"]
+    assert backend["go"]["packages_total"] == 25
+    assert len(backend["go"]["important_package_refs"]) == 10
+    assert backend["go"]["important_packages_omitted"] == 10
+    assert "external_imports" not in backend["go"]["important_package_refs"][0]
+    assert "important_packages" not in backend["go"]
+
+    frontend = units["frontend:frontend"]
+    assert frontend["javascript"]["scripts_total"] == 12
+    assert len(frontend["javascript"]["scripts"]) == 8
+    assert frontend["javascript"]["scripts_omitted"] == 4
+    assert frontend["javascript"]["api_client_directories"] == [
+        "frontend/src/http",
+        "frontend/src/services",
+    ]
+    assert frontend["javascript"]["generated_sdk_directories"] == ["frontend/src/generated/sdk"]
+
+    api_specs = {item["path"]: item for item in document["configuration"]["api_specs"]}
+    assert api_specs["backend/docs/openapi.yaml"]["workspace_unit_id"] == "backend:backend"
+    assert api_specs["backend/docs/openapi.yaml"]["paths_total"] == 1
+
+    assert document["budget"]["estimated_document_bytes"] < 70_000
+
+
+def test_build_project_model_artifact_ignores_non_router_get_calls(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / "go.mod",
+        """module github.com/acme/project
+
+go 1.22
+require github.com/gin-gonic/gin v1.10.0
+""",
+    )
+    _write_text(
+        tmp_path / "cmd" / "api" / "main.go",
+        """package main
+
+import "github.com/gin-gonic/gin"
+
+func main() {
+    router := gin.Default()
+    router.GET("/health", handler)
+}
+
+func handler(c *gin.Context) {
+    _, _ = c.Get("Authorization")
+    _, _ = c.Get("X-User-Name")
+    _ = c.Request.Header.Get("X-User-Role")
+}
+""",
+    )
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+    metadata = _snapshot_metadata(tmp_path, repo)
+
+    document = _build_project_model_document(tmp_path, metadata)
+
+    routes = document["http_surface"]["routes"]
+    assert [(route["method"], route["path"]) for route in routes] == [("GET", "/health")]
+    assert routes[0]["workspace_unit_id"] == "backend:root"
+    assert document["summary"]["http_routes_total"] == 1
+    assert document["http_surface"]["unsupported_patterns"] == []
+
+    ignored = {(item["receiver"], item["expression"]) for item in document["http_surface"]["ignored_candidates"]}
+    assert ("c", '"Authorization"') in ignored
+    assert ("c", '"X-User-Name"') in ignored
+    assert ("Header", '"X-User-Role"') in ignored
+
+
+def test_build_project_model_artifact_tracks_router_parameters(
+    tmp_path: Path,
+) -> None:
+    _write_text(
+        tmp_path / "go.mod",
+        """module github.com/acme/project
+
+go 1.22
+require github.com/gin-gonic/gin v1.10.0
+""",
+    )
+    _write_text(
+        tmp_path / "internal" / "server" / "routes.go",
+        """package server
+
+import "github.com/gin-gonic/gin"
+
+func RegisterRoutes(r *gin.Engine, api *gin.RouterGroup) {
+    r.GET("/swagger/*any", handler)
+    public := r.Group("/api")
+    public.POST("/login", handler)
+    api.GET("swagger/*any", handler)
+}
+
+func handler(c *gin.Context) {
+    _, _ = c.Get("Authorization")
+}
+""",
+    )
+
+    repo = Repo.init(tmp_path)
+    _commit_all(repo, tmp_path)
+    metadata = _snapshot_metadata(tmp_path, repo)
+
+    document = _build_project_model_document(tmp_path, metadata)
+
+    routes = {
+        (route["method"], route["path"]): route
+        for route in document["http_surface"]["routes"]
+    }
+    assert ("GET", "/swagger/*any") in routes
+    assert ("POST", "/api/login") in routes
+    assert ("GET", "swagger/*any") in routes
+    assert routes[("GET", "swagger/*any")]["confidence"] == "medium"
+    assert all(item["expression"] != '"/login"' for item in document["http_surface"]["ignored_candidates"])
+    assert ("c", '"Authorization"') in {
+        (item["receiver"], item["expression"])
+        for item in document["http_surface"]["ignored_candidates"]
+    }
 
 
 def _commit_all(repo: Repo, repo_root: Path) -> None:

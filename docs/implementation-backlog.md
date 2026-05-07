@@ -602,6 +602,7 @@
 
 ### INGEST-021 — Сжать `project_model` v2.1 и уточнить workspace ownership
 - Priority: `P0`
+- Status: completed
 - Depends on: `INGEST-015`, `INGEST-016`, `INGEST-017`
 - Goal: удержать `project_model` в разумном LLM planning budget на средних monorepo.
 - Tasks:
@@ -619,6 +620,7 @@
 
 ### INGEST-022 — Укрепить HTTP route extraction against non-router method calls
 - Priority: `P0`
+- Status: completed
 - Depends on: `INGEST-013`, `INGEST-016`, `INGEST-017`
 - Goal: убрать ложные routes из обычных method calls вроде `Header.Get`, `gin.Context.Get` и context helpers.
 - Tasks:
@@ -1067,7 +1069,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-016`. Перед переходом к `RAG-001` теперь нужно закрыть artifact-quality слой `INGEST-017`-`INGEST-022`; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`. Artifact-quality слой перед `RAG-001` закрыт; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

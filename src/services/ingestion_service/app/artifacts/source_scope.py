@@ -92,7 +92,9 @@ def _is_infra_path(path: PurePosixPath) -> bool:
         or name.startswith("dockerfile.")
         or name.startswith("docker-compose")
         or name in {"compose.yaml", "compose.yml", "makefile", ".gitlab-ci.yml", ".gitlab-ci.yaml"}
-        or bool(parts.intersection({".github", "deploy", "deployment", "k8s", "kubernetes", "terraform"}))
+        or name.endswith("stack.yml")
+        or name.endswith("stack.yaml")
+        or bool(parts.intersection({".github", "deploy", "deployment", "infrastructure", "k8s", "kubernetes", "terraform"}))
     )
 
 

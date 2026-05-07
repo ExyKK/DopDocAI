@@ -15,6 +15,7 @@ from app.artifacts.source_scope import (
 
 PROJECT_MODEL_ARTIFACT_KIND = "project_model"
 PROJECT_MODEL_SCHEMA_VERSION = 2
+PROJECT_MODEL_MODEL_REVISION = "2.1"
 
 _MAX_IMPORTANT_PACKAGES = 20
 _MAX_IMPORTANT_SYMBOLS = 40
@@ -22,6 +23,9 @@ _MAX_CONFIG_ITEMS = 50
 _MAX_KEY_FILES = 40
 _MAX_UNIT_KEY_FILES = 20
 _MAX_DEPENDENCY_HINTS = 30
+_MAX_UNIT_IMPORTANT_PACKAGE_REFS = 10
+_MAX_UNIT_SCRIPT_ITEMS = 8
+_MAX_IGNORED_HTTP_CANDIDATES = 100
 
 _HTTP_IMPORTS = {
     "net/http": "net_http",
@@ -71,6 +75,23 @@ _HTTP_GROUP_ASSIGN_RE = re.compile(
     r"(?P<kind>Group|PathPrefix)\s*\(",
     re.DOTALL,
 )
+_HTTP_ROUTER_ASSIGN_RE = re.compile(
+    r"\b(?P<target>[A-Za-z_]\w*)\s*(?::=|=)\s*(?P<constructor>"
+    r"chi\.NewRouter|gin\.Default|gin\.New|echo\.New|fiber\.New|mux\.NewRouter|http\.NewServeMux"
+    r")\s*\(",
+    re.DOTALL,
+)
+_HTTP_ROUTER_PARAM_RE = re.compile(
+    r"\b(?P<name>[A-Za-z_]\w*)\s+(?P<type>"
+    r"\*?gin\.(?:Engine|RouterGroup|IRouter)"
+    r"|\*?echo\.Echo|\*?echo\.Group"
+    r"|\*?fiber\.App|\*?fiber\.Group"
+    r"|\*?mux\.Router"
+    r"|chi\.Router"
+    r"|\*?http\.ServeMux"
+    r")\b",
+    re.DOTALL,
+)
 _HTTP_ROUTE_BLOCK_RE = re.compile(
     r"\b(?P<base>[A-Za-z_]\w*)\.Route\s*\(\s*(?P<quote>[\"`])(?P<prefix>.*?)(?P=quote)"
     r"\s*,\s*func\s*\(\s*(?P<target>[A-Za-z_]\w*)",
@@ -105,9 +126,10 @@ def build_project_model_artifact(
         http_surface=http_surface,
     )
     workspace_unit_lookup = _build_workspace_unit_lookup(workspace_units)
+    _attach_workspace_unit_ids_to_http_surface(http_surface, workspace_unit_lookup)
     go_model = _build_go_model(package_graph, workspace_unit_lookup)
     code_outline = _build_code_outline(go_symbols, go_model["important_packages"])
-    configuration_model = _build_configuration_model(config_inventory)
+    configuration_model = _build_configuration_model(config_inventory, workspace_unit_lookup)
 
     summary = {
         "files_total": file_inventory.get("summary", {}).get("files_total", snapshot_metadata["files_total"]),
@@ -138,6 +160,7 @@ def build_project_model_artifact(
     document = {
         "artifact_kind": PROJECT_MODEL_ARTIFACT_KIND,
         "schema_version": PROJECT_MODEL_SCHEMA_VERSION,
+        "model_revision": PROJECT_MODEL_MODEL_REVISION,
         "model_kind": "compact_project_manifest",
         "snapshot": {
             "branch_name": snapshot_metadata["branch_name"],
@@ -337,6 +360,20 @@ def _compact_important_package(
     }
 
 
+def _package_ref(package: dict[str, Any], workspace_unit_lookup: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "package_id": package["package_id"],
+        "dir_path": package.get("dir_path"),
+        "name": package.get("name"),
+        "workspace_unit_id": _workspace_unit_id_for_path(
+            package.get("dir_path", "."),
+            workspace_unit_lookup,
+        ),
+        "source_scope": package.get("source_scope", SOURCE_SCOPE_RUNTIME),
+        "runtime_scope": package.get("runtime_scope", True),
+    }
+
+
 def _go_modules(package_graph: dict[str, Any]) -> list[dict[str, Any]]:
     modules = package_graph.get("modules") or []
     if modules:
@@ -446,7 +483,10 @@ def _compact_symbol(symbol: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, Any]:
+def _build_configuration_model(
+    config_inventory: dict[str, Any],
+    workspace_unit_lookup: dict[str, Any],
+) -> dict[str, Any]:
     env_vars = config_inventory.get("env_vars", [])
     flags = config_inventory.get("flags", [])
     config_structs = config_inventory.get("config_structs", [])
@@ -480,7 +520,7 @@ def _build_configuration_model(config_inventory: dict[str, Any]) -> dict[str, An
         "non_primary_config_files_total": max(0, len(config_files) - len(primary_config_files)),
         "dependency_locks": _compact_dependency_locks(dependency_locks),
         "dependency_locks_omitted": max(0, len(dependency_locks) - _MAX_CONFIG_ITEMS),
-        "api_specs": config_inventory.get("api_specs", []),
+        "api_specs": _compact_api_specs(config_inventory.get("api_specs", []), workspace_unit_lookup),
     }
 
 
@@ -578,6 +618,35 @@ def _compact_dependency_locks(dependency_locks: list[dict[str, Any]]) -> list[di
     return compact
 
 
+def _compact_api_specs(
+    api_specs: list[dict[str, Any]],
+    workspace_unit_lookup: dict[str, Any],
+) -> list[dict[str, Any]]:
+    compact = []
+    for item in sorted(api_specs, key=lambda item: item.get("path", ""))[:_MAX_CONFIG_ITEMS]:
+        path = item.get("path")
+        compact.append(
+            {
+                "path": path,
+                "workspace_unit_id": _workspace_unit_id_for_path(path or ".", workspace_unit_lookup),
+                "format": item.get("format"),
+                "spec_kind": item.get("spec_kind"),
+                "spec_version": item.get("spec_version"),
+                "title": item.get("title"),
+                "version": item.get("version"),
+                "paths_total": item.get("paths_total", 0),
+                "operations_total": item.get("operations_total", 0),
+                "parse_error": item.get("parse_error", False),
+                "truncated": item.get("truncated", False),
+                "size_bytes": item.get("size_bytes", 0),
+                "line_count": item.get("line_count", 0),
+                "source_scope": item.get("source_scope", SOURCE_SCOPE_RUNTIME),
+            }
+        )
+
+    return compact
+
+
 def _source_file_path(item: dict[str, Any]) -> str | None:
     source = item.get("source")
     return source.get("file_path") if isinstance(source, dict) else None
@@ -612,7 +681,8 @@ def _build_workspace_units(
             "toolchain": module.get("toolchain"),
             "packages_total": 0,
             "entrypoints": [],
-            "important_packages": [],
+            "important_package_refs": [],
+            "important_packages_omitted": 0,
         }
         _add_unit(units, seen, unit)
 
@@ -641,7 +711,26 @@ def _build_workspace_units(
         unit["javascript"] = js_summary
         _add_unit(units, seen, unit)
 
-    infra_files = [file_record["path"] for file_record in files if _is_infra_file(file_record["path"])]
+    database_files = sorted(file_record["path"] for file_record in files if _is_database_file(file_record["path"]))
+    if database_files:
+        unit = _new_workspace_unit(
+            root_path=".",
+            unit_kind="database",
+            roles=["database"],
+            manifest_paths=database_files[:_MAX_UNIT_KEY_FILES],
+            ownership_mode="exact",
+            exact_file_paths=database_files,
+            languages=["sql"],
+            frameworks=["sql"],
+            name="database",
+        )
+        _add_unit(units, seen, unit)
+
+    infra_files = sorted(
+        file_record["path"]
+        for file_record in files
+        if _is_infra_file(file_record["path"]) and not _is_database_file(file_record["path"])
+    )
     if infra_files:
         unit = _new_workspace_unit(
             root_path=".",
@@ -656,23 +745,29 @@ def _build_workspace_units(
         )
         _add_unit(units, seen, unit)
 
-    docs_files = [
-        file_record["path"]
-        for file_record in files
-        if file_record["path"].startswith("docs/") or file_record.get("kind") == "api_spec"
-    ]
-    if docs_files:
-        docs_root = "docs" if any(path.startswith("docs/") for path in docs_files) else "."
+    for docs_root in _top_level_docs_roots(files):
         unit = _new_workspace_unit(
             root_path=docs_root,
             unit_kind="docs",
             roles=["docs"],
             manifest_paths=[],
-            ownership_mode="prefix" if docs_root == "docs" else "exact",
-            exact_file_paths=docs_files if docs_root == "." else None,
-            languages=["markdown"] if any(path.lower().endswith((".md", ".mdx", ".rst")) for path in docs_files) else [],
+            ownership_mode="prefix",
+            languages=_languages_for_files([file_record for file_record in files if _path_under_root(file_record["path"], docs_root)]),
             frameworks=[],
-            name="docs",
+            name=_unit_name_from_root(docs_root),
+        )
+        _add_unit(units, seen, unit)
+
+    for asset_root in _top_level_asset_roots(files):
+        unit = _new_workspace_unit(
+            root_path=asset_root,
+            unit_kind="assets",
+            roles=["assets"],
+            manifest_paths=[],
+            ownership_mode="prefix",
+            languages=_languages_for_files([file_record for file_record in files if _path_under_root(file_record["path"], asset_root)]),
+            frameworks=[],
+            name=_unit_name_from_root(asset_root),
         )
         _add_unit(units, seen, unit)
 
@@ -792,7 +887,7 @@ def _unit_for_file(path: str, units: list[dict[str, Any]]) -> dict[str, Any] | N
             continue
 
         if _path_under_root(path, unit["root_path"]):
-            priority = 900 if unit["unit_kind"] in {"docs", "infra"} else 500
+            priority = 900 if unit["unit_kind"] in {"assets", "database", "docs", "infra"} else 500
             candidates.append((priority, len(unit["root_path"]), unit))
 
     if not candidates:
@@ -826,9 +921,11 @@ def _attach_go_packages_to_units(units: list[dict[str, Any]], package_graph: dic
             entrypoints_by_unit.get(unit["workspace_unit_id"], []),
             key=lambda item: (item["dir_path"], item["package_id"]),
         )
-        unit["go"]["important_packages"] = [
-            _compact_important_package(package, lookup) for package in _important_packages(packages)
+        important_packages = _important_packages(packages)
+        unit["go"]["important_package_refs"] = [
+            _package_ref(package, lookup) for package in important_packages[:_MAX_UNIT_IMPORTANT_PACKAGE_REFS]
         ]
+        unit["go"]["important_packages_omitted"] = max(0, len(important_packages) - _MAX_UNIT_IMPORTANT_PACKAGE_REFS)
 
 
 def _attach_http_surface_to_units(units: list[dict[str, Any]], http_surface: dict[str, Any]) -> None:
@@ -850,6 +947,18 @@ def _attach_http_surface_to_units(units: list[dict[str, Any]], http_surface: dic
             unit["frameworks"].extend(unit["http_surface"]["frameworks"])
 
 
+def _attach_workspace_unit_ids_to_http_surface(
+    http_surface: dict[str, Any],
+    workspace_unit_lookup: dict[str, Any],
+) -> None:
+    for section in ("routes", "unsupported_patterns", "ignored_candidates"):
+        for item in http_surface.get(section, []):
+            item["workspace_unit_id"] = _workspace_unit_id_for_path(
+                item.get("file_path", "."),
+                workspace_unit_lookup,
+            )
+
+
 def _build_workspace_unit_lookup(units: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "units": [
@@ -859,7 +968,7 @@ def _build_workspace_unit_lookup(units: list[dict[str, Any]]) -> dict[str, Any]:
                 "unit_kind": unit["unit_kind"],
             }
             for unit in units
-            if unit["unit_kind"] not in {"infra", "docs"}
+            if unit["unit_kind"] not in {"assets", "database", "docs", "infra"}
         ]
     }
 
@@ -905,7 +1014,7 @@ def _javascript_summary(
     frameworks = _javascript_frameworks(dependencies, files)
     languages = _languages_for_files(files)
     package_manager = _package_manager_for_root(repo_root, root_path)
-    scripts = _package_scripts(manifest)
+    scripts = _package_script_items(manifest)
     frontend_hints = _frontend_hints(root_path, files)
     is_frontend = bool(frameworks.intersection({"react", "vue", "next", "nuxt", "svelte", "angular", "vite"}))
     is_frontend = is_frontend or bool(frontend_hints["route_directories"] or frontend_hints["component_directories"])
@@ -916,7 +1025,9 @@ def _javascript_summary(
         "languages": sorted(languages or {"javascript"}),
         "frameworks": sorted(frameworks),
         "is_frontend": is_frontend,
-        "scripts": scripts,
+        "scripts_total": len(scripts),
+        "scripts": scripts[:_MAX_UNIT_SCRIPT_ITEMS],
+        "scripts_omitted": max(0, len(scripts) - _MAX_UNIT_SCRIPT_ITEMS),
         "dependency_hints": _dependency_hints(dependencies),
         **frontend_hints,
     }
@@ -978,7 +1089,7 @@ def _package_manager_for_root(repo_root: Path, root_path: str) -> str | None:
     return None
 
 
-def _package_scripts(manifest: dict[str, Any]) -> list[dict[str, str]]:
+def _package_script_items(manifest: dict[str, Any]) -> list[dict[str, str]]:
     scripts = manifest.get("scripts")
     if not isinstance(scripts, dict):
         return []
@@ -994,7 +1105,7 @@ def _package_scripts(manifest: dict[str, Any]) -> list[dict[str, str]]:
         for name, command in sorted(scripts.items())
         if name not in preferred
     ]
-    return (items + remaining)[:10]
+    return items + remaining
 
 
 def _dependency_hints(dependencies: dict[str, str]) -> list[dict[str, str]]:
@@ -1008,11 +1119,11 @@ def _frontend_hints(root_path: str, files: list[dict[str, Any]]) -> dict[str, li
     directories = {_parent_dir(file_record["path"]) for file_record in files}
     route_dirs = _matching_dirs(root_path, directories, {"app", "pages", "routes"})
     component_dirs = _matching_dirs(root_path, directories, {"components"})
-    api_client_dirs = _matching_dirs(root_path, directories, {"api", "client", "clients"})
+    api_client_dirs = _matching_dirs(root_path, directories, {"api", "client", "clients", "http", "services"})
     generated_sdk_dirs = [
         directory
         for directory in sorted(directories)
-        if any(part in {"generated", "sdk"} for part in PurePosixPath(directory).parts)
+        if any(part in {"api-client", "clients", "generated", "openapi", "sdk"} for part in PurePosixPath(directory).parts)
         and _path_under_root(directory, root_path)
     ]
     return {
@@ -1055,8 +1166,49 @@ def _languages_for_files(files: list[dict[str, Any]]) -> list[str]:
             languages.add("markdown")
         elif suffix in {".yaml", ".yml", ".json", ".toml", ".ini", ".env"}:
             languages.add("configuration")
+        elif suffix == ".sql":
+            languages.add("sql")
 
     return sorted(languages)
+
+
+def _top_level_docs_roots(files: list[dict[str, Any]]) -> list[str]:
+    roots = set()
+    for file_record in files:
+        path = file_record["path"]
+        first_part = PurePosixPath(path).parts[0].lower() if PurePosixPath(path).parts else ""
+        if first_part in {"doc", "docs", "documentation", "site"}:
+            roots.add(PurePosixPath(path).parts[0])
+
+    return sorted(roots)
+
+
+def _top_level_asset_roots(files: list[dict[str, Any]]) -> list[str]:
+    roots = set()
+    for file_record in files:
+        path = file_record["path"]
+        parts = PurePosixPath(path).parts
+        first_part = parts[0].lower() if parts else ""
+        if first_part in {"assets", "public", "static"}:
+            roots.add(parts[0])
+
+    return sorted(roots)
+
+
+def _is_top_level_asset_file(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    return bool(parts) and parts[0].lower() in {"assets", "public", "static"}
+
+
+def _is_database_file(path: str) -> bool:
+    pure_path = PurePosixPath(path)
+    lower_name = pure_path.name.lower()
+    lower_parts = {part.lower() for part in pure_path.parts}
+    return pure_path.suffix.lower() == ".sql" and (
+        bool(lower_parts.intersection({"database", "db", "migration", "migrations", "seed", "seeds"}))
+        or "migration" in lower_name
+        or "seed" in lower_name
+    )
 
 
 def _is_infra_file(path: str) -> bool:
@@ -1067,8 +1219,10 @@ def _is_infra_file(path: str) -> bool:
         lower_name == "dockerfile"
         or lower_name.startswith("dockerfile.")
         or lower_name.startswith("docker-compose")
-        or lower_name in {"compose.yaml", "compose.yml", "makefile"}
-        or bool(lower_parts.intersection({".github", "deploy", "deployment", "k8s", "kubernetes", "terraform"}))
+        or lower_name in {"compose.yaml", "compose.yml", "makefile", ".gitlab-ci.yml", ".gitlab-ci.yaml"}
+        or lower_name.endswith("stack.yml")
+        or lower_name.endswith("stack.yaml")
+        or bool(lower_parts.intersection({".github", "deploy", "deployment", "infrastructure", "k8s", "kubernetes", "terraform"}))
     )
 
 
@@ -1081,6 +1235,10 @@ def _infra_frameworks(paths: list[str]) -> list[str]:
             frameworks.add("docker")
         if lower_name == "makefile":
             frameworks.add("make")
+        if lower_name.endswith("stack.yml") or lower_name.endswith("stack.yaml") or "infrastructure" in lower_parts:
+            frameworks.add("infrastructure")
+        if lower_name in {".gitlab-ci.yml", ".gitlab-ci.yaml"}:
+            frameworks.add("gitlab_ci")
         if lower_parts.intersection({"k8s", "kubernetes"}):
             frameworks.add("kubernetes")
         if "terraform" in lower_parts:
@@ -1101,6 +1259,10 @@ def _file_owner(file_record: dict[str, Any]) -> str:
         return "generated"
     if source_scope == "test":
         return "test"
+    if _is_database_file(path):
+        return "database"
+    if _is_top_level_asset_file(path):
+        return "assets"
     if source_scope == "infra" or _is_infra_file(path):
         return "infra"
     if source_scope == "docs" or path.startswith("docs/") or kind == "markdown":
@@ -1324,6 +1486,7 @@ def _detect_http_surface(
 
     routes: list[dict[str, Any]] = []
     unsupported_patterns: list[dict[str, Any]] = []
+    ignored_candidates: list[dict[str, Any]] = []
     for file_path, frameworks in sorted(http_imports.items()):
         source_path = repo_root / file_path
         if not source_path.exists():
@@ -1341,11 +1504,15 @@ def _detect_http_surface(
         )
         routes.extend(extracted["routes"])
         unsupported_patterns.extend(extracted["unsupported_patterns"])
+        ignored_candidates.extend(extracted["ignored_candidates"])
 
     routes = _dedupe_routes(routes)
     routes.sort(key=lambda item: (item["file_path"], item["line"], item["method"] or "", item["path"]))
     unsupported_patterns.sort(
         key=lambda item: (item["file_path"], item["line"], item["kind"], item["expression"])
+    )
+    ignored_candidates.sort(
+        key=lambda item: (item["file_path"], item["line"], item["kind"], item.get("receiver") or "", item.get("expression") or "")
     )
     frameworks = sorted({framework for values in http_imports.values() for framework in values})
     detected = bool(routes) or any(framework != "net_http" for framework in frameworks)
@@ -1357,6 +1524,7 @@ def _detect_http_surface(
         "frameworks": frameworks,
         "routes": routes,
         "unsupported_patterns": unsupported_patterns,
+        "ignored_candidates": ignored_candidates[:_MAX_IGNORED_HTTP_CANDIDATES],
     }
 
 
@@ -1370,17 +1538,22 @@ def _extract_http_routes_from_file(
 ) -> dict[str, list[dict[str, Any]]]:
     routes: list[dict[str, Any]] = []
     unsupported_patterns: list[dict[str, Any]] = []
+    ignored_candidates: list[dict[str, Any]] = []
     receiver_prefixes: dict[str, str] = {}
+    router_receivers: dict[str, str] = _detect_router_receivers_from_signatures(lines, frameworks)
 
     for statement in _iter_http_call_statements(lines):
-        _update_receiver_prefixes(receiver_prefixes, statement["text"])
+        _update_router_receivers(router_receivers, receiver_prefixes, statement["text"], frameworks)
+        _update_receiver_prefixes(receiver_prefixes, statement["text"], router_receivers)
         statement_prefixes = _route_block_prefixes(receiver_prefixes, statement["text"])
+        statement_router_receivers = _route_block_router_receivers(router_receivers, statement["text"])
         route_context = {
             "file_path": file_path,
             "frameworks": frameworks,
             "package": package_ref,
             "symbol_lookup": symbol_lookup,
             "receiver_prefixes": {**receiver_prefixes, **statement_prefixes},
+            "router_receivers": {**router_receivers, **statement_router_receivers},
             "source_scope": source_scope,
         }
 
@@ -1388,8 +1561,9 @@ def _extract_http_routes_from_file(
         routes.extend(_extract_method_func_routes(statement, route_context))
         routes.extend(_extract_handle_routes(statement, route_context))
         unsupported_patterns.extend(_extract_unsupported_http_patterns(statement, route_context))
+        ignored_candidates.extend(_extract_ignored_http_candidates(statement, route_context))
 
-    return {"routes": routes, "unsupported_patterns": unsupported_patterns}
+    return {"routes": routes, "unsupported_patterns": unsupported_patterns, "ignored_candidates": ignored_candidates}
 
 
 def _iter_http_call_statements(lines: list[str]) -> list[dict[str, Any]]:
@@ -1456,12 +1630,85 @@ def _looks_like_http_statement(line: str) -> bool:
             ".Route",
             ".PathPrefix",
             "http.Handle",
+            "chi.NewRouter",
+            "echo.New",
+            "fiber.New",
+            "gin.Default",
+            "gin.New",
+            "http.NewServeMux",
+            "mux.NewRouter",
         )
     )
 
 
-def _update_receiver_prefixes(receiver_prefixes: dict[str, str], statement: str) -> None:
+def _detect_router_receivers_from_signatures(lines: list[str], frameworks: list[str]) -> dict[str, str]:
+    receivers: dict[str, str] = {}
+    text = "\n".join(lines)
+    for function_match in re.finditer(r"\bfunc\b[^{]*\{", text, re.DOTALL):
+        signature = function_match.group(0)
+        params_start = signature.find("(")
+        if params_start < 0:
+            continue
+
+        params = _extract_call_args(signature, params_start)
+        for param_group in params:
+            names, type_name = _split_go_param_group(param_group)
+            framework = _framework_for_router_type(type_name, frameworks)
+            if framework is None:
+                continue
+
+            for name in names:
+                receivers[name] = framework
+
+    return receivers
+
+
+def _split_go_param_group(param_group: str) -> tuple[list[str], str]:
+    value = _compact_expression(param_group)
+    if not value:
+        return [], ""
+
+    parts = value.rsplit(" ", 1)
+    if len(parts) != 2:
+        return [], value
+
+    names_part, type_name = parts
+    names = [name.strip() for name in names_part.split(",") if name.strip()]
+    return names, type_name.strip()
+
+
+def _update_router_receivers(
+    router_receivers: dict[str, str],
+    receiver_prefixes: dict[str, str],
+    statement: str,
+    frameworks: list[str],
+) -> None:
+    for match in _HTTP_ROUTER_ASSIGN_RE.finditer(statement):
+        framework = _framework_for_router_constructor(match.group("constructor"), frameworks)
+        if framework is not None:
+            router_receivers[match.group("target")] = framework
+
     for match in _HTTP_GROUP_ASSIGN_RE.finditer(statement):
+        base = match.group("base")
+        if base not in router_receivers:
+            continue
+
+        args = _extract_call_args(statement, match.end() - 1)
+        prefix = _literal_arg(args[0]) if args else None
+        if prefix is not None:
+            receiver_prefixes[match.group("target")] = _join_route_paths(receiver_prefixes.get(base), prefix)
+        router_receivers[match.group("target")] = router_receivers[base]
+
+
+def _update_receiver_prefixes(
+    receiver_prefixes: dict[str, str],
+    statement: str,
+    router_receivers: dict[str, str],
+) -> None:
+    for match in _HTTP_GROUP_ASSIGN_RE.finditer(statement):
+        if match.group("base") not in router_receivers:
+            continue
+
         args = _extract_call_args(statement, match.end() - 1)
         prefix = _literal_arg(args[0]) if args else None
         if prefix is None:
@@ -1480,10 +1727,25 @@ def _route_block_prefixes(receiver_prefixes: dict[str, str], statement: str) -> 
     return prefixes
 
 
+def _route_block_router_receivers(router_receivers: dict[str, str], statement: str) -> dict[str, str]:
+    receivers: dict[str, str] = {}
+    for match in _HTTP_ROUTE_BLOCK_RE.finditer(statement):
+        base = match.group("base")
+        if base in router_receivers:
+            receivers[match.group("target")] = router_receivers[base]
+
+    return receivers
+
+
 def _extract_method_routes(statement: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
     text = statement["text"]
     for match in _HTTP_ROUTE_METHOD_RE.finditer(text):
+        receiver = match.group("receiver")
+        framework = context["router_receivers"].get(receiver)
+        if framework is None:
+            continue
+
         args = _extract_call_args(text, match.end() - 1)
         path = _literal_arg(args[0]) if args else None
         if path is None:
@@ -1493,7 +1755,10 @@ def _extract_method_routes(statement: dict[str, Any], context: dict[str, Any]) -
         if method not in _HTTP_METHODS:
             continue
 
-        receiver = match.group("receiver")
+        confidence = _route_path_confidence(path, framework)
+        if confidence is None:
+            continue
+
         handler_expression = args[1] if len(args) > 1 else None
         routes.append(
             _route_record(
@@ -1502,8 +1767,9 @@ def _extract_method_routes(statement: dict[str, Any], context: dict[str, Any]) -
                 receiver=receiver,
                 method=method,
                 path=path,
-                framework=_framework_for_method_call(match.group("method"), context["frameworks"]),
+                framework=framework,
                 handler_expression=handler_expression,
+                confidence=confidence,
             )
         )
 
@@ -1514,13 +1780,21 @@ def _extract_method_func_routes(statement: dict[str, Any], context: dict[str, An
     routes: list[dict[str, Any]] = []
     text = statement["text"]
     for match in _HTTP_METHOD_FUNC_RE.finditer(text):
+        receiver = match.group("receiver")
+        framework = context["router_receivers"].get(receiver)
+        if framework is None:
+            continue
+
         args = _extract_call_args(text, match.end() - 1)
         method = _literal_arg(args[0]).upper() if args and _literal_arg(args[0]) else None
         path = _literal_arg(args[1]) if len(args) > 1 else None
         if method not in _HTTP_METHODS or path is None:
             continue
 
-        receiver = match.group("receiver")
+        confidence = _route_path_confidence(path, framework)
+        if confidence is None:
+            continue
+
         handler_expression = args[2] if len(args) > 2 else None
         routes.append(
             _route_record(
@@ -1529,8 +1803,9 @@ def _extract_method_func_routes(statement: dict[str, Any], context: dict[str, An
                 receiver=receiver,
                 method=method,
                 path=path,
-                framework=_framework_for_method_func_call(context["frameworks"]),
+                framework=framework,
                 handler_expression=handler_expression,
+                confidence=confidence,
             )
         )
 
@@ -1541,18 +1816,25 @@ def _extract_handle_routes(statement: dict[str, Any], context: dict[str, Any]) -
     routes: list[dict[str, Any]] = []
     text = statement["text"]
     for match in _HTTP_HANDLE_RE.finditer(text):
+        receiver = match.group("receiver")
+        if receiver == "http":
+            framework = "net_http" if "net_http" in context["frameworks"] else None
+        else:
+            framework = context["router_receivers"].get(receiver)
+        if framework is None:
+            continue
+
         args = _extract_call_args(text, match.end() - 1)
         path = _literal_arg(args[0]) if args else None
         if path is None:
             continue
 
-        receiver = match.group("receiver")
+        confidence = _route_path_confidence(path, framework)
+        if confidence is None:
+            continue
+
         handler_expression = args[1] if len(args) > 1 else None
         methods = _method_chain_methods(text[match.end() :])
-        framework = "net_http" if receiver == "http" else _framework_for_handle_call(
-            context["frameworks"],
-            has_methods=bool(methods),
-        )
         for method in methods or [None]:
             routes.append(
                 _route_record(
@@ -1563,6 +1845,7 @@ def _extract_handle_routes(statement: dict[str, Any], context: dict[str, Any]) -
                     path=path,
                     framework=framework,
                     handler_expression=handler_expression,
+                    confidence=confidence,
                 )
             )
 
@@ -1576,6 +1859,14 @@ def _extract_unsupported_http_patterns(
     unsupported: list[dict[str, Any]] = []
     text = statement["text"]
     for match in list(_HTTP_ROUTE_METHOD_RE.finditer(text)) + list(_HTTP_HANDLE_RE.finditer(text)):
+        receiver = match.group("receiver")
+        if receiver == "http":
+            framework = "net_http" if "net_http" in context["frameworks"] else None
+        else:
+            framework = context["router_receivers"].get(receiver)
+        if framework is None:
+            continue
+
         args = _extract_call_args(text, match.end() - 1)
         if not args or _literal_arg(args[0]) is not None:
             continue
@@ -1583,7 +1874,7 @@ def _extract_unsupported_http_patterns(
         unsupported.append(
             {
                 "kind": "dynamic_route_path",
-                "framework": _preferred_framework(context["frameworks"]),
+                "framework": framework,
                 "file_path": context["file_path"],
                 "line": statement["line"] + text[: match.start()].count("\n"),
                 "expression": _compact_expression(args[0]),
@@ -1594,6 +1885,10 @@ def _extract_unsupported_http_patterns(
         )
 
     for match in _HTTP_GROUP_ASSIGN_RE.finditer(text):
+        framework = context["router_receivers"].get(match.group("base"))
+        if framework is None:
+            continue
+
         args = _extract_call_args(text, match.end() - 1)
         if not args or _literal_arg(args[0]) is not None:
             continue
@@ -1601,7 +1896,7 @@ def _extract_unsupported_http_patterns(
         unsupported.append(
             {
                 "kind": "dynamic_route_group",
-                "framework": _preferred_framework(context["frameworks"]),
+                "framework": framework,
                 "file_path": context["file_path"],
                 "line": statement["line"] + text[: match.start()].count("\n"),
                 "expression": _compact_expression(args[0]),
@@ -1614,6 +1909,141 @@ def _extract_unsupported_http_patterns(
     return unsupported
 
 
+def _extract_ignored_http_candidates(
+    statement: dict[str, Any],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    ignored: list[dict[str, Any]] = []
+    text = statement["text"]
+
+    for match in _HTTP_ROUTE_METHOD_RE.finditer(text):
+        receiver = match.group("receiver")
+        args = _extract_call_args(text, match.end() - 1)
+        expression = args[0] if args else ""
+        framework = context["router_receivers"].get(receiver)
+        line = statement["line"] + text[: match.start()].count("\n")
+        if framework is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_router_method_call",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=expression,
+                    reason="receiver is not a tracked router or route group",
+                )
+            )
+            continue
+
+        path = _literal_arg(expression)
+        if path is not None and _route_path_confidence(path, framework) is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_route_literal_path",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=path,
+                    reason="literal path does not look like an HTTP route",
+                )
+            )
+
+    for match in _HTTP_METHOD_FUNC_RE.finditer(text):
+        receiver = match.group("receiver")
+        args = _extract_call_args(text, match.end() - 1)
+        expression = args[1] if len(args) > 1 else ""
+        framework = context["router_receivers"].get(receiver)
+        line = statement["line"] + text[: match.start()].count("\n")
+        if framework is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_router_method_call",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=expression,
+                    reason="receiver is not a tracked router or route group",
+                )
+            )
+            continue
+
+        path = _literal_arg(expression)
+        if path is not None and _route_path_confidence(path, framework) is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_route_literal_path",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=path,
+                    reason="literal path does not look like an HTTP route",
+                )
+            )
+
+    for match in _HTTP_HANDLE_RE.finditer(text):
+        receiver = match.group("receiver")
+        args = _extract_call_args(text, match.end() - 1)
+        expression = args[0] if args else ""
+        framework = "net_http" if receiver == "http" and "net_http" in context["frameworks"] else context["router_receivers"].get(receiver)
+        line = statement["line"] + text[: match.start()].count("\n")
+        if framework is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_router_handle_call",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=expression,
+                    reason="receiver is not a tracked router or http package",
+                )
+            )
+            continue
+
+        path = _literal_arg(expression)
+        if path is not None and _route_path_confidence(path, framework) is None:
+            ignored.append(
+                _ignored_http_candidate(
+                    context,
+                    kind="non_route_literal_path",
+                    line=line,
+                    receiver=receiver,
+                    method=match.group("method"),
+                    expression=path,
+                    reason="literal path does not look like an HTTP route",
+                )
+            )
+
+    return ignored
+
+
+def _ignored_http_candidate(
+    context: dict[str, Any],
+    *,
+    kind: str,
+    line: int,
+    receiver: str,
+    method: str,
+    expression: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "file_path": context["file_path"],
+        "line": line,
+        "receiver": receiver,
+        "method": method,
+        "expression": _compact_expression(expression),
+        "reason": reason,
+        "source_scope": context["source_scope"],
+        "runtime_scope": runtime_scope_from_source_scope(context["source_scope"]),
+    }
+
+
 def _route_record(
     context: dict[str, Any],
     *,
@@ -1623,6 +2053,7 @@ def _route_record(
     path: str,
     framework: str | None,
     handler_expression: str | None,
+    confidence: str,
 ) -> dict[str, Any]:
     package_ref = context["package"]
     handler = _resolve_handler(handler_expression, package_ref, context["symbol_lookup"])
@@ -1634,7 +2065,7 @@ def _route_record(
         "line": line,
         "package": package_ref,
         "handler": handler,
-        "confidence": "high" if _literal_text(path) else "medium",
+        "confidence": confidence,
         "source_scope": context["source_scope"],
         "runtime_scope": runtime_scope_from_source_scope(context["source_scope"]),
     }
@@ -1688,6 +2119,33 @@ def _literal_arg(value: str | None) -> str | None:
 
     match = _HTTP_LITERAL_RE.match(value)
     return match.group("value") if match else None
+
+
+def _route_path_confidence(path: str, framework: str | None) -> str | None:
+    if _looks_like_route_path(path):
+        return "high"
+
+    if framework in {"echo", "fiber", "gin"} and _looks_like_framework_relative_route_path(path):
+        return "medium"
+
+    return None
+
+
+def _looks_like_route_path(path: str) -> bool:
+    if path in {"", "/"}:
+        return True
+
+    if path.startswith("/"):
+        return True
+
+    return re.match(r"^(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+/", path) is not None
+
+
+def _looks_like_framework_relative_route_path(path: str) -> bool:
+    if path.startswith(("*", ":")):
+        return True
+
+    return re.match(r"^[A-Za-z0-9_.~-]+/(?:[*:][A-Za-z_]\w*|[A-Za-z0-9_.~/-]+)$", path) is not None
 
 
 def _literal_text(value: str | None) -> bool:
@@ -1837,6 +2295,43 @@ def _framework_for_method_call(method_name: str, frameworks: list[str]) -> str |
             return framework
 
     return _preferred_framework(frameworks)
+
+
+def _framework_for_router_constructor(constructor: str, frameworks: list[str]) -> str | None:
+    constructor_frameworks = {
+        "chi.NewRouter": "chi",
+        "gin.Default": "gin",
+        "gin.New": "gin",
+        "echo.New": "echo",
+        "fiber.New": "fiber",
+        "mux.NewRouter": "gorilla_mux",
+        "http.NewServeMux": "net_http",
+    }
+    framework = constructor_frameworks.get(constructor)
+    if framework in frameworks:
+        return framework
+
+    return None
+
+
+def _framework_for_router_type(type_name: str, frameworks: list[str]) -> str | None:
+    router_types = {
+        "*gin.Engine": "gin",
+        "*gin.RouterGroup": "gin",
+        "gin.IRouter": "gin",
+        "*echo.Echo": "echo",
+        "*echo.Group": "echo",
+        "*fiber.App": "fiber",
+        "*fiber.Group": "fiber",
+        "*mux.Router": "gorilla_mux",
+        "chi.Router": "chi",
+        "*http.ServeMux": "net_http",
+    }
+    framework = router_types.get(type_name)
+    if framework in frameworks:
+        return framework
+
+    return None
 
 
 def _framework_for_handle_call(frameworks: list[str], *, has_methods: bool) -> str | None:
