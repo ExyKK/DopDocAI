@@ -146,7 +146,9 @@ services:
       INGEST_DATABASE_URL: postgresql://dopdoc:dopdoc@postgres:5432/dopdoc
       INGEST_REPO_DB_SCHEMA: repo
       INGEST_PORT: 19100
-      INGEST_ENABLE_LEGACY_RAG: "false"
+      INGEST_QDRANT_URL: http://qdrant:6333
+      INGEST_QDRANT_CODE_CHUNKS_COLLECTION: code_chunks_v1
+      INGEST_EMBEDDING_VECTOR_SIZE: "896"
 
       # MinIO (артефакты типа go_symbols.json, опционально)
       DOPDOC_S3_ENDPOINT: http://minio:9000
@@ -165,6 +167,8 @@ services:
     depends_on:
       repository_service:
         condition: service_started
+      qdrant:
+        condition: service_started
 
   ingestion_worker:
     build:
@@ -181,6 +185,10 @@ services:
       INGEST_WORKER_HEARTBEAT_SECONDS: "15"
       INGEST_CLONE_ROOT: /tmp/dopdoc-index-worker
       INGEST_REQUEST_TIMEOUT_S: "10"
+      INGEST_QDRANT_URL: http://qdrant:6333
+      INGEST_QDRANT_CODE_CHUNKS_COLLECTION: code_chunks_v1
+      INGEST_QDRANT_UPSERT_BATCH_SIZE: "64"
+      INGEST_EMBEDDING_VECTOR_SIZE: "896"
 
       DOPDOC_S3_ENDPOINT: http://minio:9000
       DOPDOC_S3_ACCESS_KEY: dopdoc
@@ -199,30 +207,12 @@ services:
         condition: service_healthy
       repository_service:
         condition: service_started
+      qdrant:
+        condition: service_started
       minio:
         condition: service_healthy
       minio_init:
         condition: service_completed_successfully
-
-#  repos_service:
-#    build:
-#      context: .
-#      dockerfile: backend/repos_service/Dockerfile.dev
-#    container_name: dopdoc_repos_service
-#    environment:
-#      REPOS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
-#      REPOS_DB_SCHEMA: "repos"
-#      REPOS_PORT: 19300
-#
-#      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
-#      OTEL_SERVICE_NAME: repos_service
-#    ports:
-#      - "19300:19300"
-#    volumes:
-#      - ./backend/repos_service:/app/backend/repos_service
-#    depends_on:
-#      postgres:
-#        condition: service_healthy
 
 #  chats_service:
 #    build:

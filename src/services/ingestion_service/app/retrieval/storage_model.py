@@ -24,6 +24,7 @@ class PayloadIndex:
 
 
 CODE_CHUNK_PAYLOAD_FIELDS: tuple[PayloadField, ...] = (
+    PayloadField("chunk_id", "keyword", True, "Deterministic logical chunk UUID."),
     PayloadField("snapshot_id", "keyword", True, "Snapshot UUID; primary retrieval filter."),
     PayloadField("repository_id", "keyword", True, "Repository UUID for isolation and diagnostics."),
     PayloadField("commit_sha", "keyword", True, "Git commit SHA represented by the snapshot."),
@@ -36,6 +37,8 @@ CODE_CHUNK_PAYLOAD_FIELDS: tuple[PayloadField, ...] = (
     PayloadField("name", "keyword", False, "Symbol/entity name when the chunk is entity-scoped."),
     PayloadField("start_line", "integer", False, "1-based inclusive source start line."),
     PayloadField("end_line", "integer", False, "1-based inclusive source end line."),
+    PayloadField("symbol_id", "keyword", False, "Source artifact symbol id linked to this chunk, when any."),
+    PayloadField("symbol_signature", "keyword", False, "Stable symbol signature used for chunk id derivation."),
     PayloadField("chunk_kind", "keyword", True, "Chunk construction strategy, such as symbol, file_slice, or artifact_slice."),
     PayloadField("is_test", "bool", True, "Whether the source chunk belongs to test scope."),
     PayloadField("source_scope", "keyword", True, "Runtime/test/generated/docs/infra/vendor source scope."),
@@ -43,6 +46,7 @@ CODE_CHUNK_PAYLOAD_FIELDS: tuple[PayloadField, ...] = (
 )
 
 CODE_CHUNK_PAYLOAD_INDEXES: tuple[PayloadIndex, ...] = (
+    PayloadIndex("chunk_id", "keyword", "Logical chunk lookup and diagnostics."),
     PayloadIndex("snapshot_id", "keyword", "Mandatory filter for all retrieval calls."),
     PayloadIndex("repository_id", "keyword", "Repository isolation and cleanup diagnostics."),
     PayloadIndex("commit_sha", "keyword", "Snapshot/debug lookup by commit."),
@@ -52,6 +56,7 @@ CODE_CHUNK_PAYLOAD_INDEXES: tuple[PayloadIndex, ...] = (
     PayloadIndex("package_id", "keyword", "Package scoped retrieval without nested-object filters."),
     PayloadIndex("kind", "keyword", "Entity kind filters."),
     PayloadIndex("name", "keyword", "Symbol/entity name filters."),
+    PayloadIndex("symbol_id", "keyword", "Trace retrieval chunks back to source symbols."),
     PayloadIndex("chunk_kind", "keyword", "Chunk strategy filters."),
     PayloadIndex("is_test", "bool", "Exclude tests by default or include them explicitly."),
     PayloadIndex("source_scope", "keyword", "Runtime/generated/docs/infra scoped retrieval."),
@@ -81,4 +86,3 @@ def qdrant_snapshot_filter(snapshot_id: str) -> dict[str, Any]:
             }
         ]
     }
-

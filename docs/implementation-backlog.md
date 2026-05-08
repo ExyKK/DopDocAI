@@ -666,6 +666,7 @@
 
 ### RAG-002 — Реализовать chunking и deterministic chunk ids
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `RAG-001`, `INGEST-004`
 - Goal: обеспечить идемпотентность и предсказуемость индекса.
 - Tasks:
@@ -677,6 +678,7 @@
 
 ### RAG-003 — Реализовать upsert/delete by snapshot
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `RAG-002`
 - Goal: безопасно переиндексировать snapshot без мусора.
 - Tasks:
@@ -686,9 +688,30 @@
 - Acceptance:
 - stale chunks не остаются после реиндексации того же snapshot.
 
-### RAG-004 — Реализовать retrieval API по `snapshot_id`
+### RAG-004A — Вынести embedding model в отдельный контейнер
 - Priority: `P0`
 - Depends on: `RAG-003`
+- Goal: использовать настоящие code embeddings для retrieval, не утяжеляя `ingestion_worker` и сохраняя быстрый dev/smoke режим.
+- Tasks:
+- ввести `EmbeddingProvider` abstraction для indexing и retrieval query embeddings;
+- добавить provider modes: `hash` для lightweight dev и `jina_http` для реальной модели;
+- поднять отдельный optional `embedding_service` container/profile с `jinaai/jina-code-embeddings-0.5b`;
+- использовать 896-dimensional vectors, совместимые с текущим `code_chunks_v1`;
+- поддержать batch embedding chunks и query embedding;
+- применять task prefixes для `nl2code`/technical QA: разные prefixes для query и document chunks;
+- добавить health/retry/timeout handling для embedding provider;
+- записывать `embedding_provider`, `embedding_model`, `embedding_dimension` и batch counters в `index_runs.StatsJson`;
+- документировать ручной режим: lightweight compose без модели и quality compose с embedding container.
+- Acceptance:
+- обычный dev compose может индексировать без скачивания/загрузки модели через `hash`;
+- optional compose profile запускает real embedding container и индексирует `code_chunks_v1` через `jina-code-embeddings-0.5b`;
+- `torch/transformers` и model weights не попадают в образ `ingestion_worker`;
+- повторная индексация snapshot сохраняет deterministic chunk ids и заменяет vectors без stale points;
+- `RAG-004` retrieval API использует тот же provider abstraction для query vectors.
+
+### RAG-004 — Реализовать retrieval API по `snapshot_id`
+- Priority: `P0`
+- Depends on: `RAG-003`, `RAG-004A`
 - Goal: chats и docs не должны знать про коллекции и qdrant payload details.
 - Tasks:
 - реализовать внутренний endpoint `POST /internal/retrieval/search`;
@@ -1070,7 +1093,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыт `RAG-001`. Следующий RAG-срез начинается с chunking/upsert (`RAG-002`/`RAG-003`); `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-003`. Следующий RAG-срез лучше начать с `RAG-004A`, чтобы подключить real code embeddings через отдельный контейнер и сохранить lightweight dev режим, затем перейти к `RAG-004` internal retrieval API по `snapshot_id`; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
@@ -1096,15 +1119,16 @@
 20. `RAG-001`
 21. `RAG-002`
 22. `RAG-003`
-23. `RAG-004`
-24. `REPO-004`
-25. `CHAT-001`
-26. `CHAT-002`
-27. `CHAT-003`
-28. `GATEWAY-001`
-29. `GATEWAY-002`
-30. `TEST-001`
-31. `TEST-002`
+23. `RAG-004A`
+24. `RAG-004`
+25. `REPO-004`
+26. `CHAT-001`
+27. `CHAT-002`
+28. `CHAT-003`
+29. `GATEWAY-001`
+30. `GATEWAY-002`
+31. `TEST-001`
+32. `TEST-002`
 
 После этого проект уже сможет:
 

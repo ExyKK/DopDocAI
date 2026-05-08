@@ -2,10 +2,11 @@
 
 ## Purpose
 
-`RAG-001` fixes the first retrieval storage contract for the rewritten
-`ingestion_service`. The retrieval index is snapshot-bound and internal-only:
-public domain APIs use `snapshot_id`, never Qdrant collection names or raw
-payload details.
+`RAG-001` fixed the first retrieval storage contract for the rewritten
+`ingestion_service`; `RAG-002`/`RAG-003` add deterministic chunk construction
+and snapshot replacement semantics. The retrieval index is snapshot-bound and
+internal-only: public domain APIs use `snapshot_id`, never Qdrant collection
+names or raw payload details.
 
 ## Collection
 
@@ -23,6 +24,7 @@ retrieval must filter by `snapshot_id`.
 
 Required payload fields:
 
+- `chunk_id`
 - `snapshot_id`
 - `repository_id`
 - `commit_sha`
@@ -42,15 +44,32 @@ Optional payload fields:
 - `name`
 - `start_line`
 - `end_line`
+- `symbol_id`
+- `symbol_signature`
 
 `package` is a structured object for normalized source metadata. `package_id`
 is duplicated as a flat field because it is a practical Qdrant filter/index
 target.
 
+`chunk_id` is a deterministic UUIDv5 derived from:
+
+- `snapshot_id`
+- normalized `file_path`
+- symbol signature, or `file:{path}` for plain text fallback chunks
+- zero-based `chunk_index`
+
+Go symbols are chunked as `chunk_kind=go_symbol` and retain `symbol_id` so
+source artifact symbol records can be traced to one or more chunks. Text files
+that are not represented by Go symbol chunks use bounded `file_slice` chunks.
+The first implementation uses a deterministic hashing vectorizer with the same
+configured vector size, which keeps local containers light while preserving the
+Qdrant upsert/delete contract.
+
 ## Payload Indexes
 
 Create indexes for:
 
+- `chunk_id`
 - `snapshot_id`
 - `repository_id`
 - `commit_sha`
@@ -60,6 +79,7 @@ Create indexes for:
 - `package_id`
 - `kind`
 - `name`
+- `symbol_id`
 - `chunk_kind`
 - `is_test`
 - `source_scope`
@@ -68,3 +88,15 @@ Create indexes for:
 not know the collection name and should call ingestion retrieval through an
 internal endpoint.
 
+## Snapshot Replacement
+
+Indexing a snapshot performs a full replace for that snapshot:
+
+1. Ensure `code_chunks_v1` and payload indexes exist.
+2. Count and delete existing points with `snapshot_id`.
+3. Batch upsert deterministic chunk ids and vectors.
+4. Record counters on `index_runs`: built chunks, deleted stale points, batches,
+   and upserted vectors.
+
+This means retrying or reindexing the same snapshot does not accumulate stale
+chunks.

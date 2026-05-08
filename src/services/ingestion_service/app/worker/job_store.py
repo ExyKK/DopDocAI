@@ -279,6 +279,53 @@ class IndexRunStore:
                     stats,
                 )
 
+    def update_retrieval_stats(
+        self,
+        run_id: str,
+        worker_id: str,
+        *,
+        chunks_total: int,
+        vectors_upserted: int,
+        stats: dict[str, Any],
+    ) -> None:
+        with self._connect() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    sql.SQL(
+                        """
+                        UPDATE {schema}.index_runs
+                        SET
+                            "ChunksTotal" = %s,
+                            "VectorsUpserted" = %s,
+                            "StatsJson" = %s::jsonb,
+                            "UpdatedAt" = now()
+                        WHERE "Id" = %s
+                        AND "Status" = 'running'
+                        AND "WorkerId" = %s
+                        AND "LeaseUntil" > now();
+                        """
+                    ).format(schema=sql.Identifier(self._schema)),
+                    (
+                        chunks_total,
+                        vectors_upserted,
+                        json.dumps(stats, sort_keys=True, separators=(",", ":"), default=str),
+                        run_id,
+                        worker_id,
+                    ),
+                )
+
+                if row.rowcount != 1:
+                    raise LeaseLostError(f"Lease lost for index_run {run_id}.")
+
+                self._insert_event(
+                    conn,
+                    run_id,
+                    "info",
+                    "upserting_retrieval_chunks",
+                    "Updated retrieval counters for index run.",
+                    stats,
+                )
+
     def mark_succeeded(self, run_id: str, worker_id: str) -> None:
         with self._connect() as conn:
             with conn.transaction():

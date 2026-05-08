@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     qdrant_url: AnyUrl = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_code_chunks_collection: str = "code_chunks_v1"
+    qdrant_upsert_batch_size: int = 64
     embedding_vector_size: int = 896
 
     s3_endpoint: AnyUrl = Field(

@@ -17,6 +17,9 @@ from app.infra.repository_service_client import (
     RepositoryServiceClientError,
 )
 from app.infra.treesitter_client import TreeSitterManager
+from app.retrieval.indexer import CodeChunkIndexer
+from app.retrieval.qdrant_store import QdrantCodeChunkStore, RetrievalIndexError
+from app.retrieval.vectorizer import HashingVectorizer
 from app.worker.artifact_pipeline import build_index_analysis_artifacts, publish_analysis_artifacts
 from app.worker.job_store import ClaimedIndexRun, IndexRunStore, LeaseLostError
 from app.worker.snapshot_resolver import SnapshotResolver
@@ -77,6 +80,7 @@ class IndexWorker:
         storage: ObjectStorageClient,
         resolver: SnapshotResolver,
         treesitter: TreeSitterManager,
+        retrieval_indexer: CodeChunkIndexer,
         worker_settings: WorkerSettings,
     ):
         self._store = store
@@ -84,6 +88,7 @@ class IndexWorker:
         self._storage = storage
         self._resolver = resolver
         self._treesitter = treesitter
+        self._retrieval_indexer = retrieval_indexer
         self._settings = worker_settings
 
     def run_once(self) -> bool:
@@ -234,13 +239,40 @@ class IndexWorker:
                     ensure_alive=heartbeat.ensure_alive,
                 )
 
+                retrieval_result = self._retrieval_indexer.rebuild_snapshot_index(
+                    resolved.repo_path,
+                    repository_id=run.repository_id,
+                    snapshot_id=snapshot_id,
+                    snapshot_metadata=metadata,
+                    artifacts=artifact_result.artifacts,
+                    report_progress=report_artifact_progress,
+                    ensure_alive=heartbeat.ensure_alive,
+                )
+                stats_with_retrieval = {
+                    **artifact_result.stats,
+                    "retrieval_index": retrieval_result.stats,
+                }
+                self._store.update_retrieval_stats(
+                    run.id,
+                    self._settings.worker_id,
+                    chunks_total=retrieval_result.chunks_total,
+                    vectors_upserted=retrieval_result.upserted_points,
+                    stats=stats_with_retrieval,
+                )
+                heartbeat.ensure_alive()
+
                 self._store.update_progress(
                     run.id,
                     self._settings.worker_id,
                     "finalizing",
-                    98,
+                    99,
                     "Finalizing analysis artifact index run.",
-                    payload=artifact_result.finalizing_payload,
+                    payload={
+                        **artifact_result.finalizing_payload,
+                        "chunks_total": retrieval_result.chunks_total,
+                        "vectors_upserted": retrieval_result.upserted_points,
+                        "stale_chunks_deleted": retrieval_result.deleted_points,
+                    },
                 )
                 heartbeat.ensure_alive()
 
@@ -302,6 +334,16 @@ def main() -> None:
         ),
         resolver=SnapshotResolver(GitClient(), settings.clone_root),
         treesitter=TreeSitterManager(),
+        retrieval_indexer=CodeChunkIndexer(
+            store=QdrantCodeChunkStore(
+                url=str(settings.qdrant_url),
+                api_key=settings.qdrant_api_key,
+                collection_name=settings.qdrant_code_chunks_collection,
+                vector_size=settings.embedding_vector_size,
+                batch_size=settings.qdrant_upsert_batch_size,
+            ),
+            vectorizer=HashingVectorizer(settings.embedding_vector_size),
+        ),
         worker_settings=worker_settings,
     )
 
@@ -362,6 +404,9 @@ def _map_error_code(exc: Exception) -> str:
 
     if isinstance(exc, LeaseLostError):
         return "worker_lease_lost"
+
+    if isinstance(exc, RetrievalIndexError):
+        return "retrieval_index_failed"
 
     message = str(exc).lower()
     if "branch" in message or "commit" in message or "repository" in message:

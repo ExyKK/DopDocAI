@@ -24,6 +24,7 @@ def test_code_chunks_v1_payload_fields_cover_snapshot_bound_sources() -> None:
     required = set(required_payload_field_names())
 
     assert {
+        "chunk_id",
         "snapshot_id",
         "repository_id",
         "commit_sha",
@@ -35,10 +36,13 @@ def test_code_chunks_v1_payload_fields_cover_snapshot_bound_sources() -> None:
         "name",
         "start_line",
         "end_line",
+        "symbol_id",
+        "symbol_signature",
         "chunk_kind",
         "is_test",
     } <= fields
     assert {
+        "chunk_id",
         "snapshot_id",
         "repository_id",
         "commit_sha",
@@ -57,6 +61,7 @@ def test_code_chunks_v1_payload_indexes_support_snapshot_filtered_retrieval() ->
 
     assert "snapshot_id" in indexes
     assert {
+        "chunk_id",
         "repository_id",
         "commit_sha",
         "file_path",
@@ -65,6 +70,7 @@ def test_code_chunks_v1_payload_indexes_support_snapshot_filtered_retrieval() ->
         "package_id",
         "kind",
         "name",
+        "symbol_id",
         "chunk_kind",
         "is_test",
         "source_scope",
@@ -79,4 +85,3 @@ def test_code_chunks_v1_payload_indexes_support_snapshot_filtered_retrieval() ->
             }
         ]
     }
-
