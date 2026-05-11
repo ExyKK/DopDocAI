@@ -7,7 +7,7 @@ _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+")
 
 
 class HashingVectorizer:
-    """Small deterministic vectorizer used until a hosted embedding provider is added."""
+    """Small deterministic vectorizer backing the lightweight hash embedding provider."""
 
     def __init__(self, vector_size: int) -> None:
         if vector_size <= 0:

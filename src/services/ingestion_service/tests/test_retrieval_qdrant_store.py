@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from app.retrieval.chunks import CodeChunk
 from app.retrieval.qdrant_store import QdrantCodeChunkStore
 from app.retrieval.storage_model import CODE_CHUNKS_VECTOR_NAME, payload_index_field_names
-from app.retrieval.vectorizer import HashingVectorizer
 
 
 def test_replace_snapshot_chunks_deletes_existing_points_and_batch_upserts() -> None:
@@ -40,7 +39,7 @@ def test_replace_snapshot_chunks_deletes_existing_points_and_batch_upserts() -> 
     result = store.replace_snapshot_chunks(
         snapshot_id="snapshot-id",
         chunks=chunks,
-        vectorizer=HashingVectorizer(8),
+        vectors=tuple([[float(index)] * 8 for index in range(3)]),
     )
 
     assert result.deleted_points == 2
@@ -69,7 +68,7 @@ def test_replace_snapshot_chunks_creates_collection_when_missing() -> None:
     result = store.replace_snapshot_chunks(
         snapshot_id="snapshot-id",
         chunks=(),
-        vectorizer=HashingVectorizer(16),
+        vectors=(),
     )
 
     assert result.deleted_points == 0

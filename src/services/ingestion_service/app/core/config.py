@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +18,17 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
     qdrant_code_chunks_collection: str = "code_chunks_v1"
     qdrant_upsert_batch_size: int = 64
+
+    embedding_provider: Literal["hash", "jina_http"] = "hash"
+    embedding_model: str = "jinaai/jina-code-embeddings-0.5b"
     embedding_vector_size: int = 896
+    embedding_batch_size: int = 16
+    embedding_service_url: AnyUrl = "http://localhost:19400"
+    embedding_request_timeout_s: float = 60.0
+    embedding_max_attempts: int = 3
+    embedding_retry_delay_s: float = 1.0
+    embedding_document_prefix: str = "Represent this code chunk for technical retrieval:\n"
+    embedding_query_prefix: str = "Represent this technical question for retrieving relevant code:\n"
 
     s3_endpoint: AnyUrl = Field(
         default="http://localhost:9000",

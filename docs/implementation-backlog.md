@@ -690,6 +690,7 @@
 
 ### RAG-004A — Вынести embedding model в отдельный контейнер
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `RAG-003`
 - Goal: использовать настоящие code embeddings для retrieval, не утяжеляя `ingestion_worker` и сохраняя быстрый dev/smoke режим.
 - Tasks:
@@ -1093,7 +1094,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-003`. Следующий RAG-срез лучше начать с `RAG-004A`, чтобы подключить real code embeddings через отдельный контейнер и сохранить lightweight dev режим, затем перейти к `RAG-004` internal retrieval API по `snapshot_id`; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004A`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

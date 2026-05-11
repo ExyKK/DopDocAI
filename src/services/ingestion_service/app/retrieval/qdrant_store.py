@@ -11,7 +11,6 @@ from app.retrieval.storage_model import (
     CODE_CHUNKS_DISTANCE,
     CODE_CHUNKS_VECTOR_NAME,
 )
-from app.retrieval.vectorizer import HashingVectorizer
 
 
 class RetrievalIndexError(RuntimeError):
@@ -52,20 +51,23 @@ class QdrantCodeChunkStore:
         *,
         snapshot_id: str,
         chunks: tuple[CodeChunk, ...],
-        vectorizer: HashingVectorizer,
+        vectors: tuple[list[float], ...],
     ) -> SnapshotReplaceResult:
+        if len(chunks) != len(vectors):
+            raise ValueError(f"Chunk/vector count mismatch: {len(chunks)} chunks, {len(vectors)} vectors.")
+
         try:
             self.ensure_collection()
             deleted_points = self.delete_snapshot(snapshot_id)
             batches_total = 0
-            for batch in _batches(chunks, self.batch_size):
+            for batch in _batches(tuple(zip(chunks, vectors, strict=True)), self.batch_size):
                 points = [
                     models.PointStruct(
                         id=chunk.chunk_id,
-                        vector={CODE_CHUNKS_VECTOR_NAME: vectorizer.vectorize(chunk.text)},
+                        vector={CODE_CHUNKS_VECTOR_NAME: vector},
                         payload=chunk.payload,
                     )
-                    for chunk in batch
+                    for chunk, vector in batch
                 ]
                 self._client.upsert(
                     collection_name=self.collection_name,
@@ -171,6 +173,9 @@ def _is_existing_index_error(exc: Exception) -> bool:
     return status_code in {400, 409} and ("already" in message or "exist" in message)
 
 
-def _batches(items: tuple[CodeChunk, ...], batch_size: int) -> Iterable[tuple[CodeChunk, ...]]:
+def _batches(
+    items: tuple[tuple[CodeChunk, list[float]], ...],
+    batch_size: int,
+) -> Iterable[tuple[tuple[CodeChunk, list[float]], ...]]:
     for index in range(0, len(items), batch_size):
         yield items[index : index + batch_size]

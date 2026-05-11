@@ -17,9 +17,10 @@ from app.infra.repository_service_client import (
     RepositoryServiceClientError,
 )
 from app.infra.treesitter_client import TreeSitterManager
+from app.retrieval.embeddings import EmbeddingProviderError
 from app.retrieval.indexer import CodeChunkIndexer
+from app.retrieval.provider_factory import create_embedding_provider
 from app.retrieval.qdrant_store import QdrantCodeChunkStore, RetrievalIndexError
-from app.retrieval.vectorizer import HashingVectorizer
 from app.worker.artifact_pipeline import build_index_analysis_artifacts, publish_analysis_artifacts
 from app.worker.job_store import ClaimedIndexRun, IndexRunStore, LeaseLostError
 from app.worker.snapshot_resolver import SnapshotResolver
@@ -342,7 +343,7 @@ def main() -> None:
                 vector_size=settings.embedding_vector_size,
                 batch_size=settings.qdrant_upsert_batch_size,
             ),
-            vectorizer=HashingVectorizer(settings.embedding_vector_size),
+            embedding_provider=create_embedding_provider(settings),
         ),
         worker_settings=worker_settings,
     )
@@ -404,6 +405,9 @@ def _map_error_code(exc: Exception) -> str:
 
     if isinstance(exc, LeaseLostError):
         return "worker_lease_lost"
+
+    if isinstance(exc, EmbeddingProviderError):
+        return "embedding_failed"
 
     if isinstance(exc, RetrievalIndexError):
         return "retrieval_index_failed"

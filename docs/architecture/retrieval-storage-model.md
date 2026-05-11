@@ -4,7 +4,9 @@
 
 `RAG-001` fixed the first retrieval storage contract for the rewritten
 `ingestion_service`; `RAG-002`/`RAG-003` add deterministic chunk construction
-and snapshot replacement semantics. The retrieval index is snapshot-bound and
+and snapshot replacement semantics; `RAG-004A` introduces an embedding provider
+boundary so local dev can stay lightweight while quality indexing can use a
+separate model container. The retrieval index is snapshot-bound and
 internal-only: public domain APIs use `snapshot_id`, never Qdrant collection
 names or raw payload details.
 
@@ -61,9 +63,21 @@ target.
 Go symbols are chunked as `chunk_kind=go_symbol` and retain `symbol_id` so
 source artifact symbol records can be traced to one or more chunks. Text files
 that are not represented by Go symbol chunks use bounded `file_slice` chunks.
-The first implementation uses a deterministic hashing vectorizer with the same
-configured vector size, which keeps local containers light while preserving the
-Qdrant upsert/delete contract.
+
+## Embedding Providers
+
+`ingestion_service` uses an internal `EmbeddingProvider` abstraction for both
+document chunks and future retrieval queries.
+
+- `hash`: default lightweight dev/smoke provider; deterministic, no model
+  download, same configured vector size.
+- `jina_http`: quality provider that calls optional `embedding_service`, which
+  serves `jinaai/jina-code-embeddings-0.5b` in a separate container.
+
+The default vector size remains `896`, matching `jina-code-embeddings-0.5b` and
+the existing `code_chunks_v1` collection. Provider metadata is recorded in
+`index_runs.StatsJson`: `embedding_provider`, `embedding_model`,
+`embedding_dimension`, `embedding_batches_total` and `embedding_inputs_total`.
 
 ## Payload Indexes
 
