@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,11 +10,11 @@ class Settings(BaseSettings):
     port: int = 19400
 
     model_name: str = "jinaai/jina-code-embeddings-0.5b"
-    vector_size: int = 896
-    batch_size: int = 8
+    vector_size: int = Field(default=896, ge=1)
+    batch_size: int = Field(default=8, ge=1)
     device: str | None = None
     torch_dtype: str | None = None
-    max_seq_length: int | None = None
+    max_seq_length: int | None = Field(default=None, ge=1)
     trust_remote_code: bool = True
     normalize_embeddings: bool = True
     access_log: bool = False

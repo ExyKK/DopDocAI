@@ -730,9 +730,26 @@
 - OOM на большом request не валит сервис без попытки уменьшить batch size;
 - документация содержит команды настройки драйвера, NVIDIA Container Toolkit, compose запуска и проверки `nvidia-smi`.
 
+### RAG-004C — Refactor `embedding_service` application structure
+- Priority: `P1`
+- Status: `completed`
+- Depends on: `RAG-004B`
+- Goal: убрать прототипное состояние, где serving/runtime/DTO/error handling живут в `main.py`.
+- Tasks:
+- вынести FastAPI route wiring в `app/api.py`;
+- вынести request/response модели в `app/schemas.py`;
+- вынести model loading, dtype handling, max sequence length, CUDA OOM retry и vector dimension validation в `app/runtime.py`;
+- оставить `app/main.py` только ASGI entrypoint и uvicorn runner;
+- сериализовать `model.encode` через lock, чтобы параллельные requests не устраивали лишний CUDA OOM;
+- добавить unit tests на runtime без загрузки настоящей embedding model.
+- Acceptance:
+- `main.py` больше не содержит business/runtime logic;
+- CUDA OOM retry и dimension validation покрыты быстрыми тестами;
+- внешний HTTP contract `GET /health` и `POST /internal/embeddings` сохранён.
+
 ### RAG-004 — Реализовать retrieval API по `snapshot_id`
 - Priority: `P0`
-- Depends on: `RAG-003`, `RAG-004A`
+- Depends on: `RAG-003`, `RAG-004A`, `RAG-004C`
 - Goal: chats и docs не должны знать про коллекции и qdrant payload details.
 - Tasks:
 - реализовать внутренний endpoint `POST /internal/retrieval/search`;
@@ -1114,7 +1131,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004B`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004C`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
@@ -1142,15 +1159,16 @@
 22. `RAG-003`
 23. `RAG-004A`
 24. `RAG-004B`
-25. `RAG-004`
-26. `REPO-004`
-27. `CHAT-001`
-28. `CHAT-002`
-29. `CHAT-003`
-30. `GATEWAY-001`
-31. `GATEWAY-002`
-32. `TEST-001`
-33. `TEST-002`
+25. `RAG-004C`
+26. `RAG-004`
+27. `REPO-004`
+28. `CHAT-001`
+29. `CHAT-002`
+30. `CHAT-003`
+31. `GATEWAY-001`
+32. `GATEWAY-002`
+33. `TEST-001`
+34. `TEST-002`
 
 После этого проект уже сможет:
 
