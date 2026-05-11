@@ -710,6 +710,26 @@
 - повторная индексация snapshot сохраняет deterministic chunk ids и заменяет vectors без stale points;
 - `RAG-004` retrieval API использует тот же provider abstraction для query vectors.
 
+### RAG-004B — Добавить CUDA runtime для `embedding_service`
+- Priority: `P1`
+- Status: `completed`
+- Depends on: `RAG-004A`
+- Goal: сделать real embedding mode практически пригодным для локального NVIDIA dev-стенда без утяжеления `ingestion_worker`.
+- Tasks:
+- добавить `Dockerfile.cuda` для `embedding_service` на CUDA/PyTorch runtime;
+- добавить compose override `docker-compose.embeddings.cuda.yml` для того же `embedding_service`;
+- оставить CPU `embeddings` profile и lightweight `hash` mode без изменений;
+- отключить шумные uvicorn access logs по умолчанию и увеличить healthcheck interval;
+- снизить CUDA memory footprint для GTX 1650: conservative batch, fp16, max sequence length and allocator hint;
+- добавить graceful CUDA OOM retry with smaller internal batch sizes;
+- добавить ручной GPU setup guide для Arch/Omarchy + `linux-g14` + GTX 1650.
+- Acceptance:
+- CUDA mode использует тот же compose service name `embedding_service` и тот же `jina_http` provider contract;
+- CPU/GPU embedding runtimes не меняют код retrieval/indexing;
+- `/health` показывает runtime device для быстрой проверки CUDA;
+- OOM на большом request не валит сервис без попытки уменьшить batch size;
+- документация содержит команды настройки драйвера, NVIDIA Container Toolkit, compose запуска и проверки `nvidia-smi`.
+
 ### RAG-004 — Реализовать retrieval API по `snapshot_id`
 - Priority: `P0`
 - Depends on: `RAG-003`, `RAG-004A`
@@ -1094,7 +1114,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004A`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004B`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
@@ -1121,15 +1141,16 @@
 21. `RAG-002`
 22. `RAG-003`
 23. `RAG-004A`
-24. `RAG-004`
-25. `REPO-004`
-26. `CHAT-001`
-27. `CHAT-002`
-28. `CHAT-003`
-29. `GATEWAY-001`
-30. `GATEWAY-002`
-31. `TEST-001`
-32. `TEST-002`
+24. `RAG-004B`
+25. `RAG-004`
+26. `REPO-004`
+27. `CHAT-001`
+28. `CHAT-002`
+29. `CHAT-003`
+30. `GATEWAY-001`
+31. `GATEWAY-002`
+32. `TEST-001`
+33. `TEST-002`
 
 После этого проект уже сможет:
 

@@ -6,7 +6,8 @@
 `ingestion_service`; `RAG-002`/`RAG-003` add deterministic chunk construction
 and snapshot replacement semantics; `RAG-004A` introduces an embedding provider
 boundary so local dev can stay lightweight while quality indexing can use a
-separate model container. The retrieval index is snapshot-bound and
+separate model container; `RAG-004B` adds an optional CUDA runtime for that same
+container. The retrieval index is snapshot-bound and
 internal-only: public domain APIs use `snapshot_id`, never Qdrant collection
 names or raw payload details.
 
@@ -78,6 +79,15 @@ The default vector size remains `896`, matching `jina-code-embeddings-0.5b` and
 the existing `code_chunks_v1` collection. Provider metadata is recorded in
 `index_runs.StatsJson`: `embedding_provider`, `embedding_model`,
 `embedding_dimension`, `embedding_batches_total` and `embedding_inputs_total`.
+
+The model container has two runtime shapes:
+
+- `embeddings`: CPU profile for correctness checks when GPU is unavailable.
+- `embeddings` plus `docker-compose.embeddings.cuda.yml`: the same
+  `embedding_service` switched to `Dockerfile.cuda`, `EMBED_DEVICE=cuda` and a
+  Docker Compose NVIDIA GPU reservation. The worker still talks to the same
+  `jina_http` provider URL, so retrieval/indexing code does not depend on
+  whether the model runs on CPU or GPU.
 
 ## Payload Indexes
 

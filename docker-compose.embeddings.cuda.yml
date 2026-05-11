@@ -1,0 +1,20 @@
+services:
+  embedding_service:
+    build:
+      context: .
+      dockerfile: src/services/embedding_service/Dockerfile.cuda
+    environment:
+      EMBED_BATCH_SIZE: ${EMBED_GPU_BATCH_SIZE:-4}
+      EMBED_DEVICE: cuda
+      EMBED_TORCH_DTYPE: ${EMBED_TORCH_DTYPE:-float16}
+      EMBED_MAX_SEQ_LENGTH: ${EMBED_MAX_SEQ_LENGTH:-1024}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

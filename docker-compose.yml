@@ -144,8 +144,10 @@ services:
     environment:
       EMBED_MODEL_NAME: jinaai/jina-code-embeddings-0.5b
       EMBED_VECTOR_SIZE: "896"
-      EMBED_BATCH_SIZE: "8"
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
       EMBED_TRUST_REMOTE_CODE: "true"
+      EMBED_ACCESS_LOG: ${EMBED_ACCESS_LOG:-false}
+      EMBED_LOG_LEVEL: ${EMBED_LOG_LEVEL:-info}
       HF_HOME: /models/huggingface
       TRANSFORMERS_CACHE: /models/huggingface
     ports:
@@ -154,7 +156,7 @@ services:
       - embedding_models:/models
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:19400/health || exit 1"]
-      interval: 15s
+      interval: 60s
       timeout: 10s
       retries: 20
       start_period: 120s
@@ -174,7 +176,7 @@ services:
       INGEST_EMBEDDING_PROVIDER: ${INGEST_EMBEDDING_PROVIDER:-hash}
       INGEST_EMBEDDING_MODEL: jinaai/jina-code-embeddings-0.5b
       INGEST_EMBEDDING_VECTOR_SIZE: "896"
-      INGEST_EMBEDDING_SERVICE_URL: http://embedding_service:19400
+      INGEST_EMBEDDING_SERVICE_URL: ${INGEST_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
 
       # MinIO (артефакты типа go_symbols.json, опционально)
       DOPDOC_S3_ENDPOINT: http://minio:9000
@@ -217,8 +219,8 @@ services:
       INGEST_EMBEDDING_PROVIDER: ${INGEST_EMBEDDING_PROVIDER:-hash}
       INGEST_EMBEDDING_MODEL: jinaai/jina-code-embeddings-0.5b
       INGEST_EMBEDDING_VECTOR_SIZE: "896"
-      INGEST_EMBEDDING_BATCH_SIZE: "16"
-      INGEST_EMBEDDING_SERVICE_URL: http://embedding_service:19400
+      INGEST_EMBEDDING_BATCH_SIZE: "32"
+      INGEST_EMBEDDING_SERVICE_URL: ${INGEST_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
       INGEST_EMBEDDING_REQUEST_TIMEOUT_S: "120"
       INGEST_EMBEDDING_MAX_ATTEMPTS: "5"
       INGEST_EMBEDDING_RETRY_DELAY_S: "2"

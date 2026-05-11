@@ -12,8 +12,12 @@ class Settings(BaseSettings):
     vector_size: int = 896
     batch_size: int = 8
     device: str | None = None
+    torch_dtype: str | None = None
+    max_seq_length: int | None = None
     trust_remote_code: bool = True
     normalize_embeddings: bool = True
+    access_log: bool = False
+    log_level: str = "info"
 
 
 settings = Settings()
