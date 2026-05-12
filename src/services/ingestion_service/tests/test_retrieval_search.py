@@ -19,18 +19,20 @@ def test_retrieval_searcher_embeds_query_and_maps_qdrant_hits() -> None:
     result = searcher.search(
         RetrievalSearchRequest(
             snapshot_id="snapshot-1",
-            query="where are sections loaded?",
+            query="where is postgres.Repository.Get in backend/repo.go?",
             top_k=3,
             filters=CodeChunkSearchFilters(languages=("go",), include_tests=False),
         )
     )
 
-    assert provider.queries == ["where are sections loaded?"]
+    assert provider.queries[0].startswith("where is postgres.Repository.Get")
+    assert "Symbols:" in provider.queries[0]
+    assert "Paths:" in provider.queries[0]
     assert store.calls == [
         {
             "snapshot_id": "snapshot-1",
             "query_vector": [0.1, 0.2, 0.3],
-            "limit": 3,
+            "limit": 12,
             "filters": CodeChunkSearchFilters(languages=("go",), include_tests=False),
             "score_threshold": None,
         }
@@ -41,6 +43,48 @@ def test_retrieval_searcher_embeds_query_and_maps_qdrant_hits() -> None:
     assert result.matches[0].source.package is not None
     assert result.matches[0].source.package.import_path == "example/backend"
     assert result.matches[0].entity.name == "postgres.Repository.Get"
+    assert result.matches[0].dense_score == 0.91
+    assert result.matches[0].score_breakdown.total_boost > 0
+    assert result.hybrid_enabled is True
+    assert result.candidate_count == 1
+
+
+def test_retrieval_searcher_reranks_symbol_path_match_over_dense_score() -> None:
+    searcher = RetrievalSearcher(
+        embedding_provider=FakeEmbeddingProvider(),
+        store=FakeSearchStore(
+            hits=(
+                _hit(
+                    chunk_id="dense-only",
+                    score=0.92,
+                    file_path="backend/unrelated.go",
+                    name="postgres.Other",
+                    text="func Other() {}",
+                ),
+                _hit(
+                    chunk_id="exact-symbol",
+                    score=0.70,
+                    file_path="backend/repo.go",
+                    name="postgres.Repository.Get",
+                    text="func Get(ctx context.Context) ([]Section, error)",
+                ),
+            )
+        ),
+    )
+
+    result = searcher.search(
+        RetrievalSearchRequest(
+            snapshot_id="snapshot-1",
+            query="postgres.Repository.Get in backend/repo.go",
+            top_k=1,
+            filters=CodeChunkSearchFilters(),
+        )
+    )
+
+    assert [match.chunk_id for match in result.matches] == ["exact-symbol"]
+    assert result.matches[0].dense_score == 0.70
+    assert result.matches[0].score_breakdown.path > 0
+    assert result.matches[0].score_breakdown.symbol > 0
 
 
 def test_qdrant_store_search_builds_snapshot_and_optional_filters() -> None:
@@ -100,9 +144,13 @@ def test_retrieval_search_route_returns_normalized_response() -> None:
     body = response.model_dump()
     assert body["snapshot_id"] == "snapshot-1"
     assert body["embedding_provider"] == "fake"
+    assert body["hybrid"]["enabled"] is True
+    assert body["hybrid"]["candidate_count"] == 1
     assert len(body["matches"]) == 1
     match = body["matches"][0]
     assert match["chunk_id"] == "chunk-1"
+    assert match["dense_score"] == 0.91
+    assert match["score_breakdown"]["total_boost"] > 0
     assert match["source"]["file_path"] == "backend/repo.go"
     assert match["entity"]["chunk_kind"] == "go_symbol"
 
@@ -171,8 +219,9 @@ class FailingEmbeddingProvider(FakeEmbeddingProvider):
 
 
 class FakeSearchStore:
-    def __init__(self) -> None:
+    def __init__(self, *, hits: tuple[CodeChunkSearchHit, ...] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
+        self._hits = hits
 
     def search_snapshot_chunks(
         self,
@@ -192,39 +241,48 @@ class FakeSearchStore:
                 "score_threshold": score_threshold,
             }
         )
-        return (
-            CodeChunkSearchHit(
-                point_id="chunk-1",
-                score=0.91,
-                payload={
-                    "chunk_id": "chunk-1",
-                    "snapshot_id": snapshot_id,
-                    "repository_id": "repo-1",
-                    "commit_sha": "a" * 40,
-                    "file_path": "backend/repo.go",
-                    "language": "go",
-                    "kind": "method",
-                    "chunk_kind": "go_symbol",
-                    "is_test": False,
-                    "source_scope": "runtime",
-                    "text": "func Get(ctx context.Context) ([]Section, error)",
-                    "workspace_unit_id": "backend:api",
-                    "package_id": "example/backend#postgres",
-                    "package": {
-                        "package_id": "example/backend#postgres",
-                        "name": "postgres",
-                        "import_path": "example/backend",
-                        "dir_path": "backend",
-                        "module_path": "example",
-                    },
-                    "name": "postgres.Repository.Get",
-                    "start_line": 20,
-                    "end_line": 50,
-                    "symbol_id": "symbol-1",
-                    "symbol_signature": "func Get(ctx context.Context) ([]Section, error)",
-                },
-            ),
-        )
+        return self._hits or (_hit(),)
+
+
+def _hit(
+    *,
+    chunk_id: str = "chunk-1",
+    score: float = 0.91,
+    file_path: str = "backend/repo.go",
+    name: str = "postgres.Repository.Get",
+    text: str = "func Get(ctx context.Context) ([]Section, error)",
+) -> CodeChunkSearchHit:
+    return CodeChunkSearchHit(
+        point_id=chunk_id,
+        score=score,
+        payload={
+            "chunk_id": chunk_id,
+            "snapshot_id": "snapshot-1",
+            "repository_id": "repo-1",
+            "commit_sha": "a" * 40,
+            "file_path": file_path,
+            "language": "go",
+            "kind": "method",
+            "chunk_kind": "go_symbol",
+            "is_test": False,
+            "source_scope": "runtime",
+            "text": text,
+            "workspace_unit_id": "backend:api",
+            "package_id": "example/backend#postgres",
+            "package": {
+                "package_id": "example/backend#postgres",
+                "name": "postgres",
+                "import_path": "example/backend",
+                "dir_path": "backend",
+                "module_path": "example",
+            },
+            "name": name,
+            "start_line": 20,
+            "end_line": 50,
+            "symbol_id": "symbol-1",
+            "symbol_signature": "func Get(ctx context.Context) ([]Section, error)",
+        },
+    )
 
 
 class FakeQdrantPoint:

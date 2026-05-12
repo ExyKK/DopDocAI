@@ -762,11 +762,12 @@
 
 ### RAG-005 — Добавить hybrid retrieval
 - Priority: `P1`
+- Status: `completed`
 - Depends on: `RAG-004`, `INGEST-007`
 - Goal: улучшить точность ответов и документации.
 - Tasks:
 - добавить exact/path/symbol boost поверх dense search;
-- использовать `project_model` и `go_symbols` для query expansion;
+- использовать payload metadata из `project_model`/`go_symbols`/`package_graph` для query expansion и rerank;
 - добавить rerank heuristic без отдельного ML reranker.
 - Acceptance:
 - вопросы по символам, пакетам и конкретным файлам отвечаются стабильнее.
@@ -1147,7 +1148,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004`. Следующий выбор зависит от цели: `RAG-005` для качества retrieval, `RAG-006` для скорости/качества embedding pipeline на реальных репозиториях, либо `CHAT-002`/`CHAT-003` для выхода в end-to-end chat use case. `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`. Следующий выбор зависит от цели: `RAG-006` для скорости/качества embedding pipeline на реальных репозиториях, либо `CHAT-002`/`CHAT-003` для выхода в end-to-end chat use case. `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

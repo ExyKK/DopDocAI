@@ -10,6 +10,7 @@ from app.retrieval.search import (
     RetrievalEntity,
     RetrievalMatch,
     RetrievalPackage,
+    RetrievalScoreBreakdown,
     RetrievalSearcher,
     RetrievalSearchError,
     RetrievalSearchRequest,
@@ -68,12 +69,31 @@ class RetrievalEntityDto(BaseModel):
     symbol_signature: str | None = None
 
 
+class RetrievalScoreBreakdownDto(BaseModel):
+    dense: float
+    path: float
+    symbol: float
+    lexical: float
+    scope: float
+    total_boost: float
+
+
 class RetrievalMatchDto(BaseModel):
     chunk_id: str
     score: float
+    dense_score: float
+    score_breakdown: RetrievalScoreBreakdownDto
     text: str
     source: RetrievalSourceDto
     entity: RetrievalEntityDto
+
+
+class RetrievalHybridDto(BaseModel):
+    enabled: bool
+    candidate_count: int
+    query_terms: list[str]
+    path_hints: list[str]
+    symbol_hints: list[str]
 
 
 class RetrievalSearchResponseDto(BaseModel):
@@ -83,6 +103,7 @@ class RetrievalSearchResponseDto(BaseModel):
     elapsed_ms: float
     embedding_provider: str
     embedding_model: str
+    hybrid: RetrievalHybridDto
     matches: list[RetrievalMatchDto]
 
 
@@ -140,6 +161,13 @@ def _response_from_result(result: RetrievalSearchResult) -> RetrievalSearchRespo
         elapsed_ms=result.elapsed_ms,
         embedding_provider=result.embedding_provider,
         embedding_model=result.embedding_model,
+        hybrid=RetrievalHybridDto(
+            enabled=result.hybrid_enabled,
+            candidate_count=result.candidate_count,
+            query_terms=list(result.query_terms),
+            path_hints=list(result.path_hints),
+            symbol_hints=list(result.symbol_hints),
+        ),
         matches=[_match_dto(match) for match in result.matches],
     )
 
@@ -148,9 +176,22 @@ def _match_dto(match: RetrievalMatch) -> RetrievalMatchDto:
     return RetrievalMatchDto(
         chunk_id=match.chunk_id,
         score=match.score,
+        dense_score=match.dense_score,
+        score_breakdown=_score_breakdown_dto(match.score_breakdown),
         text=match.text,
         source=_source_dto(match.source),
         entity=_entity_dto(match.entity),
+    )
+
+
+def _score_breakdown_dto(score_breakdown: RetrievalScoreBreakdown) -> RetrievalScoreBreakdownDto:
+    return RetrievalScoreBreakdownDto(
+        dense=score_breakdown.dense,
+        path=score_breakdown.path,
+        symbol=score_breakdown.symbol,
+        lexical=score_breakdown.lexical,
+        scope=score_breakdown.scope,
+        total_boost=score_breakdown.total_boost,
     )
 
 

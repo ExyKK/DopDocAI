@@ -133,8 +133,8 @@ Qdrant:
 - Route: `POST /internal/v1/retrieval/search`
 - Required request fields: `snapshot_id`, `query`
 - Optional request fields: `top_k`, `score_threshold`, `filters`
-- Response: normalized matches with `score`, `text`, `source` and `entity`
-  fields.
+- Response: normalized matches with `score`, `dense_score`,
+  `score_breakdown`, `text`, `source` and `entity` fields.
 
 Supported filters:
 
@@ -150,3 +150,20 @@ The endpoint embeds the query through the configured `EmbeddingProvider`,
 searches `code_chunks_v1` with a mandatory `snapshot_id` filter, and returns
 source DTOs. It does not expose collection names, vector names or raw Qdrant
 point structures to downstream services.
+
+`RAG-005` adds a lightweight hybrid layer over dense search:
+
+1. Analyze the user query for path-like hints, symbol-like identifiers and
+   lexical terms.
+2. Expand the embedding query with extracted symbol/path hints.
+3. Fetch a larger dense candidate set from Qdrant.
+4. Rerank candidates with deterministic boosts from payload metadata:
+   `file_path`, `name`, `symbol_signature`, `package_id`,
+   `workspace_unit_id`, `source_scope`, `chunk_kind` and `text`.
+5. Return only the requested `top_k` matches, including score breakdowns for
+   observability.
+
+Those payload fields are derived from `project_model`, `go_symbols`,
+`package_graph` and file inventory artifacts during indexing. The hybrid layer
+therefore improves symbol/path questions without requiring downstream services
+to load raw artifacts or know the Qdrant schema.
