@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from app.api.routes.retrieval import RetrievalSearchRequestDto, search_retrieval
 from app.retrieval.embeddings import EmbeddingProviderError
+from app.retrieval.hybrid import analyze_query
 from app.retrieval.qdrant_store import (
     CodeChunkSearchFilters,
     CodeChunkSearchHit,
@@ -63,7 +64,7 @@ def test_retrieval_searcher_reranks_symbol_path_match_over_dense_score() -> None
                 ),
                 _hit(
                     chunk_id="exact-symbol",
-                    score=0.70,
+                    score=0.82,
                     file_path="backend/repo.go",
                     name="postgres.Repository.Get",
                     text="func Get(ctx context.Context) ([]Section, error)",
@@ -82,9 +83,55 @@ def test_retrieval_searcher_reranks_symbol_path_match_over_dense_score() -> None
     )
 
     assert [match.chunk_id for match in result.matches] == ["exact-symbol"]
-    assert result.matches[0].dense_score == 0.70
+    assert result.matches[0].dense_score == 0.82
     assert result.matches[0].score_breakdown.path > 0
     assert result.matches[0].score_breakdown.symbol > 0
+
+
+def test_general_query_keeps_dense_order_without_scope_boost() -> None:
+    searcher = RetrievalSearcher(
+        embedding_provider=FakeEmbeddingProvider(),
+        store=FakeSearchStore(
+            hits=(
+                _hit(
+                    chunk_id="runtime-symbol",
+                    score=0.80,
+                    file_path="backend/repo.go",
+                    name="postgres.Repository.Get",
+                    text="func Get(ctx context.Context) ([]Section, error)",
+                ),
+                _hit(
+                    chunk_id="higher-dense",
+                    score=0.82,
+                    file_path="docs/architecture.md",
+                    name="architecture.md",
+                    text="Repository sections are loaded by the backend service.",
+                ),
+            )
+        ),
+    )
+
+    result = searcher.search(
+        RetrievalSearchRequest(
+            snapshot_id="snapshot-1",
+            query="где загружаются секции в репозитории",
+            top_k=1,
+            filters=CodeChunkSearchFilters(),
+        )
+    )
+
+    assert [match.chunk_id for match in result.matches] == ["higher-dense"]
+    assert result.matches[0].score_breakdown.total_boost == 0.0
+    assert result.matches[0].score_breakdown.scope == 0.0
+
+
+def test_russian_query_keeps_explicit_code_hints() -> None:
+    query = analyze_query("где находится postgres.Repository.Get в backend/repo.go")
+
+    assert query.symbol_hints == ("postgres.repository.get",)
+    assert query.path_hints == ("backend/repo.go", "repo.go")
+    assert "Symbols: postgres.repository.get" in query.expanded
+    assert "Paths: backend/repo.go repo.go" in query.expanded
 
 
 def test_qdrant_store_search_builds_snapshot_and_optional_filters() -> None:
@@ -150,7 +197,7 @@ def test_retrieval_search_route_returns_normalized_response() -> None:
     match = body["matches"][0]
     assert match["chunk_id"] == "chunk-1"
     assert match["dense_score"] == 0.91
-    assert match["score_breakdown"]["total_boost"] > 0
+    assert match["score_breakdown"]["total_boost"] == 0.0
     assert match["source"]["file_path"] == "backend/repo.go"
     assert match["entity"]["chunk_kind"] == "go_symbol"
 

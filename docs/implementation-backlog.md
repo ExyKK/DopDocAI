@@ -768,9 +768,10 @@
 - Tasks:
 - добавить exact/path/symbol boost поверх dense search;
 - использовать payload metadata из `project_model`/`go_symbols`/`package_graph` для query expansion и rerank;
-- добавить rerank heuristic без отдельного ML reranker.
+- добавить rerank heuristic без отдельного ML reranker;
+- сделать hybrid консервативным для общих вопросов: без `scope_boost`, без lexical boost при отсутствии явных path/symbol hints, с поддержкой русскоязычных запросов вокруг code hints.
 - Acceptance:
-- вопросы по символам, пакетам и конкретным файлам отвечаются стабильнее.
+- вопросы по символам, пакетам и конкретным файлам отвечаются стабильнее, а общие вопросы по репозиторию остаются dense-first.
 
 ### RAG-006 — Добавить token-aware chunking и length-bucketed embedding
 - Priority: `P1`

@@ -69,7 +69,6 @@ class RetrievalScoreBreakdown:
     path: float
     symbol: float
     lexical: float
-    scope: float
     total_boost: float
 
 
@@ -199,7 +198,6 @@ def _score_breakdown(factors: HybridRankFactors) -> RetrievalScoreBreakdown:
         path=factors.path,
         symbol=factors.symbol,
         lexical=factors.lexical,
-        scope=factors.scope,
         total_boost=factors.total_boost,
     )
 

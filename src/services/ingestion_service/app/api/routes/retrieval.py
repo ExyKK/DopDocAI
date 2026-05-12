@@ -74,7 +74,6 @@ class RetrievalScoreBreakdownDto(BaseModel):
     path: float
     symbol: float
     lexical: float
-    scope: float
     total_boost: float
 
 
@@ -190,7 +189,6 @@ def _score_breakdown_dto(score_breakdown: RetrievalScoreBreakdown) -> RetrievalS
         path=score_breakdown.path,
         symbol=score_breakdown.symbol,
         lexical=score_breakdown.lexical,
-        scope=score_breakdown.scope,
         total_boost=score_breakdown.total_boost,
     )
 

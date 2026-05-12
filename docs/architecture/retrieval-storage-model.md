@@ -154,14 +154,20 @@ point structures to downstream services.
 `RAG-005` adds a lightweight hybrid layer over dense search:
 
 1. Analyze the user query for path-like hints, symbol-like identifiers and
-   lexical terms.
-2. Expand the embedding query with extracted symbol/path hints.
+   lexical terms, including Russian-language user questions around code hints.
+2. Expand the embedding query only with extracted symbol/path hints.
 3. Fetch a larger dense candidate set from Qdrant.
-4. Rerank candidates with deterministic boosts from payload metadata:
-   `file_path`, `name`, `symbol_signature`, `package_id`,
-   `workspace_unit_id`, `source_scope`, `chunk_kind` and `text`.
+4. Rerank candidates with conservative deterministic boosts from payload
+   metadata: `file_path`, `name`, `symbol_signature`, `package_id`,
+   `workspace_unit_id` and `text`.
 5. Return only the requested `top_k` matches, including score breakdowns for
    observability.
+
+General repository questions intentionally stay dense-first: generic words do
+not become symbol hints, lexical boosts are disabled without explicit
+path/symbol hints, and `source_scope`/`chunk_kind` do not add score boosts.
+Downstream callers should use filters, not hidden rerank bias, when they want
+to exclude tests or narrow scopes.
 
 Those payload fields are derived from `project_model`, `go_symbols`,
 `package_graph` and file inventory artifacts during indexing. The hybrid layer

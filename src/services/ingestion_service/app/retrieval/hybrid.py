@@ -9,7 +9,7 @@ from app.retrieval.qdrant_store import CodeChunkSearchHit
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b")
 _PATH_RE = re.compile(r"\b[\w.-]+(?:/[\w.-]+)+\b")
 _FILE_RE = re.compile(r"\b[\w.-]+\.(?:go|cs|ts|tsx|js|jsx|py|md|json|ya?ml|sql|svg|mod|sum)\b")
-_WORD_RE = re.compile(r"[a-z0-9_]{3,}")
+_WORD_RE = re.compile(r"[a-zа-яё0-9_]{3,}")
 _CAMEL_RE = re.compile(r"[a-z][A-Z]|[A-Z]{2,}[a-z]")
 
 _STOPWORDS = {
@@ -40,6 +40,39 @@ _STOPWORDS = {
     "where",
     "which",
     "with",
+    "без",
+    "где",
+    "для",
+    "его",
+    "если",
+    "есть",
+    "зачем",
+    "или",
+    "как",
+    "какая",
+    "какие",
+    "какой",
+    "код",
+    "когда",
+    "метод",
+    "найди",
+    "находится",
+    "объясни",
+    "пакет",
+    "почему",
+    "покажи",
+    "про",
+    "работает",
+    "расскажи",
+    "репозиторий",
+    "репозитории",
+    "сервис",
+    "файл",
+    "функция",
+    "что",
+    "через",
+    "это",
+    "этот",
 }
 
 
@@ -51,6 +84,10 @@ class HybridQuery:
     path_hints: tuple[str, ...]
     symbol_hints: tuple[str, ...]
 
+    @property
+    def has_specific_hints(self) -> bool:
+        return bool(self.path_hints or self.symbol_hints)
+
 
 @dataclass(frozen=True)
 class HybridRankFactors:
@@ -58,11 +95,10 @@ class HybridRankFactors:
     path: float = 0.0
     symbol: float = 0.0
     lexical: float = 0.0
-    scope: float = 0.0
 
     @property
     def total_boost(self) -> float:
-        return self.path + self.symbol + self.lexical + self.scope
+        return self.path + self.symbol + self.lexical
 
     @property
     def final_score(self) -> float:
@@ -125,7 +161,6 @@ def _rank_factors(hit: CodeChunkSearchHit, query: HybridQuery) -> HybridRankFact
         path=_path_boost(payload, query),
         symbol=_symbol_boost(payload, query),
         lexical=_lexical_boost(payload, query),
-        scope=_scope_boost(payload),
     )
 
 
@@ -141,13 +176,13 @@ def _path_boost(payload: dict[str, Any], query: HybridQuery) -> float:
         hint_name = PurePosixPath(hint).name
         hint_stem = PurePosixPath(hint).stem.lower()
         if hint == file_path:
-            best = max(best, 0.35)
+            best = max(best, 0.14)
         elif file_path.endswith(f"/{hint}") or hint.endswith(f"/{file_path}"):
-            best = max(best, 0.30)
-        elif hint_name == file_name:
-            best = max(best, 0.22)
-        elif hint_stem and hint_stem == file_stem:
             best = max(best, 0.12)
+        elif hint_name == file_name:
+            best = max(best, 0.08)
+        elif hint_stem and hint_stem == file_stem:
+            best = max(best, 0.04)
     return best
 
 
@@ -166,25 +201,25 @@ def _symbol_boost(payload: dict[str, Any], query: HybridQuery) -> float:
     for hint in query.symbol_hints:
         hint_leaf = hint.rsplit(".", 1)[-1]
         if hint and hint == name:
-            best = max(best, 0.40)
+            best = max(best, 0.16)
         elif hint_leaf and hint_leaf == name_leaf:
-            best = max(best, 0.30)
-        elif hint and hint in searchable:
-            best = max(best, 0.18)
-        elif hint_leaf and hint_leaf in searchable:
             best = max(best, 0.12)
+        elif hint and hint in searchable:
+            best = max(best, 0.08)
+        elif hint_leaf and hint_leaf in searchable:
+            best = max(best, 0.05)
     return best
 
 
 def _lexical_boost(payload: dict[str, Any], query: HybridQuery) -> float:
-    if not query.terms:
+    if not query.terms or not query.has_specific_hints:
         return 0.0
 
     weighted_fields = (
-        (str(payload.get("name", "")), 0.035),
-        (str(payload.get("file_path", "")), 0.030),
-        (str(payload.get("symbol_signature", "")), 0.025),
-        (str(payload.get("text", ""))[:4096], 0.012),
+        (str(payload.get("name", "")), 0.012),
+        (str(payload.get("file_path", "")), 0.010),
+        (str(payload.get("symbol_signature", "")), 0.008),
+        (str(payload.get("text", ""))[:4096], 0.004),
     )
     score = 0.0
     for text, weight in weighted_fields:
@@ -192,22 +227,7 @@ def _lexical_boost(payload: dict[str, Any], query: HybridQuery) -> float:
         if not terms:
             continue
         score += len(set(query.terms) & terms) * weight
-    return min(score, 0.20)
-
-
-def _scope_boost(payload: dict[str, Any]) -> float:
-    source_scope = str(payload.get("source_scope", ""))
-    chunk_kind = str(payload.get("chunk_kind", ""))
-    is_test = bool(payload.get("is_test", False))
-
-    boost = 0.0
-    if source_scope == "runtime":
-        boost += 0.025
-    if chunk_kind == "go_symbol":
-        boost += 0.020
-    if is_test:
-        boost -= 0.020
-    return boost
+    return min(score, 0.05)
 
 
 def _path_candidates(query: str) -> tuple[str, ...]:
@@ -216,11 +236,14 @@ def _path_candidates(query: str) -> tuple[str, ...]:
 
 def _symbol_candidates(query: str) -> tuple[str, ...]:
     candidates: list[str] = []
-    for value in _IDENTIFIER_RE.findall(query):
+    for match in _IDENTIFIER_RE.finditer(query):
+        value = match.group(0)
         normalized = _normalize_symbol(value)
-        if not normalized or normalized in _STOPWORDS:
+        if not normalized or normalized in _STOPWORDS or _FILE_RE.fullmatch(normalized):
             continue
-        if "." in normalized or "_" in normalized or _CAMEL_RE.search(value) or len(normalized) >= 5:
+        follows_call = query[match.end() :].lstrip().startswith("(")
+        is_quoted = match.start() > 0 and query[match.start() - 1] in "`'"
+        if "." in normalized or "_" in normalized or _CAMEL_RE.search(value) or follows_call or is_quoted:
             candidates.append(normalized)
     return tuple(candidates)
 
