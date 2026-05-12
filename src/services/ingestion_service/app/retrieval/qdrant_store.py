@@ -27,6 +27,24 @@ class SnapshotReplaceResult:
     vector_size: int
 
 
+@dataclass(frozen=True)
+class CodeChunkSearchFilters:
+    workspace_unit_ids: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ()
+    source_scopes: tuple[str, ...] = ()
+    chunk_kinds: tuple[str, ...] = ()
+    package_ids: tuple[str, ...] = ()
+    file_paths: tuple[str, ...] = ()
+    include_tests: bool = True
+
+
+@dataclass(frozen=True)
+class CodeChunkSearchHit:
+    point_id: str
+    score: float
+    payload: dict[str, Any]
+
+
 class QdrantCodeChunkStore:
     def __init__(
         self,
@@ -129,6 +147,56 @@ class QdrantCodeChunkStore:
         )
         return deleted_points
 
+    def search_snapshot_chunks(
+        self,
+        *,
+        snapshot_id: str,
+        query_vector: list[float],
+        limit: int,
+        filters: CodeChunkSearchFilters | None = None,
+        score_threshold: float | None = None,
+    ) -> tuple[CodeChunkSearchHit, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive.")
+        if len(query_vector) != self.vector_size:
+            raise ValueError(
+                f"Query vector dimension mismatch: expected {self.vector_size}, got {len(query_vector)}."
+            )
+
+        try:
+            query_response = self._client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                using=CODE_CHUNKS_VECTOR_NAME,
+                query_filter=_search_filter(snapshot_id, filters or CodeChunkSearchFilters()),
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+                score_threshold=score_threshold,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RetrievalIndexError(f"Qdrant code chunk search failed: {exc}") from exc
+
+        points = getattr(query_response, "points", None)
+        if points is None and isinstance(query_response, tuple):
+            points = query_response[0]
+        if points is None:
+            points = []
+
+        hits: list[CodeChunkSearchHit] = []
+        for point in points:
+            payload = getattr(point, "payload", None) or {}
+            if not isinstance(payload, dict):
+                payload = dict(payload)
+            hits.append(
+                CodeChunkSearchHit(
+                    point_id=str(getattr(point, "id", "")),
+                    score=float(getattr(point, "score", 0.0) or 0.0),
+                    payload=payload,
+                )
+            )
+        return tuple(hits)
+
 
 def _snapshot_filter(snapshot_id: str) -> models.Filter:
     return models.Filter(
@@ -139,6 +207,39 @@ def _snapshot_filter(snapshot_id: str) -> models.Filter:
             )
         ]
     )
+
+
+def _search_filter(snapshot_id: str, filters: CodeChunkSearchFilters) -> models.Filter:
+    must: list[models.FieldCondition] = [
+        models.FieldCondition(
+            key="snapshot_id",
+            match=models.MatchValue(value=snapshot_id),
+        )
+    ]
+
+    _append_match_any(must, "workspace_unit_id", filters.workspace_unit_ids)
+    _append_match_any(must, "language", filters.languages)
+    _append_match_any(must, "source_scope", filters.source_scopes)
+    _append_match_any(must, "chunk_kind", filters.chunk_kinds)
+    _append_match_any(must, "package_id", filters.package_ids)
+    _append_match_any(must, "file_path", filters.file_paths)
+    if not filters.include_tests:
+        must.append(models.FieldCondition(key="is_test", match=models.MatchValue(value=False)))
+
+    return models.Filter(must=must)
+
+
+def _append_match_any(
+    conditions: list[models.FieldCondition],
+    key: str,
+    values: tuple[str, ...],
+) -> None:
+    if not values:
+        return
+    if len(values) == 1:
+        conditions.append(models.FieldCondition(key=key, match=models.MatchValue(value=values[0])))
+        return
+    conditions.append(models.FieldCondition(key=key, match=models.MatchAny(any=list(values))))
 
 
 def _distance() -> models.Distance:

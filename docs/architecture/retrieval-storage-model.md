@@ -124,3 +124,29 @@ Indexing a snapshot performs a full replace for that snapshot:
 
 This means retrying or reindexing the same snapshot does not accumulate stale
 chunks.
+
+## Internal Search API
+
+`RAG-004` exposes retrieval through `ingestion_service`, not directly through
+Qdrant:
+
+- Route: `POST /internal/v1/retrieval/search`
+- Required request fields: `snapshot_id`, `query`
+- Optional request fields: `top_k`, `score_threshold`, `filters`
+- Response: normalized matches with `score`, `text`, `source` and `entity`
+  fields.
+
+Supported filters:
+
+- `workspace_unit_ids`
+- `languages`
+- `source_scopes`
+- `chunk_kinds`
+- `package_ids`
+- `file_paths`
+- `include_tests`
+
+The endpoint embeds the query through the configured `EmbeddingProvider`,
+searches `code_chunks_v1` with a mandatory `snapshot_id` filter, and returns
+source DTOs. It does not expose collection names, vector names or raw Qdrant
+point structures to downstream services.

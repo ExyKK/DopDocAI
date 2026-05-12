@@ -1,0 +1,246 @@
+import pytest
+from fastapi import HTTPException
+
+from app.api.routes.retrieval import RetrievalSearchRequestDto, search_retrieval
+from app.retrieval.embeddings import EmbeddingProviderError
+from app.retrieval.qdrant_store import (
+    CodeChunkSearchFilters,
+    CodeChunkSearchHit,
+    QdrantCodeChunkStore,
+)
+from app.retrieval.search import RetrievalSearcher, RetrievalSearchRequest
+
+
+def test_retrieval_searcher_embeds_query_and_maps_qdrant_hits() -> None:
+    provider = FakeEmbeddingProvider()
+    store = FakeSearchStore()
+    searcher = RetrievalSearcher(embedding_provider=provider, store=store)
+
+    result = searcher.search(
+        RetrievalSearchRequest(
+            snapshot_id="snapshot-1",
+            query="where are sections loaded?",
+            top_k=3,
+            filters=CodeChunkSearchFilters(languages=("go",), include_tests=False),
+        )
+    )
+
+    assert provider.queries == ["where are sections loaded?"]
+    assert store.calls == [
+        {
+            "snapshot_id": "snapshot-1",
+            "query_vector": [0.1, 0.2, 0.3],
+            "limit": 3,
+            "filters": CodeChunkSearchFilters(languages=("go",), include_tests=False),
+            "score_threshold": None,
+        }
+    ]
+    assert result.embedding_provider == "fake"
+    assert result.matches[0].chunk_id == "chunk-1"
+    assert result.matches[0].source.file_path == "backend/repo.go"
+    assert result.matches[0].source.package is not None
+    assert result.matches[0].source.package.import_path == "example/backend"
+    assert result.matches[0].entity.name == "postgres.Repository.Get"
+
+
+def test_qdrant_store_search_builds_snapshot_and_optional_filters() -> None:
+    client = FakeQdrantSearchClient()
+    store = QdrantCodeChunkStore(
+        url="http://qdrant:6333",
+        api_key=None,
+        collection_name="code_chunks_v1",
+        vector_size=3,
+        client=client,
+    )
+
+    hits = store.search_snapshot_chunks(
+        snapshot_id="snapshot-1",
+        query_vector=[0.1, 0.2, 0.3],
+        limit=5,
+        filters=CodeChunkSearchFilters(
+            workspace_unit_ids=("backend:api",),
+            languages=("go", "markdown"),
+            source_scopes=("runtime",),
+            include_tests=False,
+        ),
+        score_threshold=0.25,
+    )
+
+    assert len(hits) == 1
+    assert hits[0].score == 0.91
+    assert client.query["collection_name"] == "code_chunks_v1"
+    assert client.query["using"] == "dense"
+    assert client.query["limit"] == 5
+    assert client.query["score_threshold"] == 0.25
+    query_filter = client.query["query_filter"]
+    conditions = {condition.key: condition for condition in query_filter.must}
+    assert conditions["snapshot_id"].match.value == "snapshot-1"
+    assert conditions["workspace_unit_id"].match.value == "backend:api"
+    assert conditions["language"].match.any == ["go", "markdown"]
+    assert conditions["source_scope"].match.value == "runtime"
+    assert conditions["is_test"].match.value is False
+
+
+def test_retrieval_search_route_returns_normalized_response() -> None:
+    response = search_retrieval(
+        RetrievalSearchRequestDto.model_validate(
+            {
+                "snapshot_id": "snapshot-1",
+                "query": "where are sections loaded?",
+                "top_k": 3,
+                "filters": {"languages": ["go", "go", ""], "include_tests": False},
+            }
+        ),
+        searcher=RetrievalSearcher(
+            embedding_provider=FakeEmbeddingProvider(),
+            store=FakeSearchStore(),
+        ),
+    )
+
+    body = response.model_dump()
+    assert body["snapshot_id"] == "snapshot-1"
+    assert body["embedding_provider"] == "fake"
+    assert len(body["matches"]) == 1
+    match = body["matches"][0]
+    assert match["chunk_id"] == "chunk-1"
+    assert match["source"]["file_path"] == "backend/repo.go"
+    assert match["entity"]["chunk_kind"] == "go_symbol"
+
+
+def test_retrieval_search_route_maps_embedding_failures_to_bad_gateway() -> None:
+    with pytest.raises(HTTPException) as exc:
+        search_retrieval(
+            RetrievalSearchRequestDto.model_validate(
+                {
+                    "snapshot_id": "snapshot-1",
+                    "query": "anything",
+                }
+            ),
+            searcher=RetrievalSearcher(
+                embedding_provider=FailingEmbeddingProvider(),
+                store=FakeSearchStore(),
+            ),
+        )
+
+    assert exc.value.status_code == 502
+    assert "Embedding provider failed" in exc.value.detail
+
+
+def test_retrieval_search_route_deduplicates_filters() -> None:
+    store = FakeSearchStore()
+    searcher = RetrievalSearcher(
+        embedding_provider=FakeEmbeddingProvider(),
+        store=store,
+    )
+
+    search_retrieval(
+        RetrievalSearchRequestDto.model_validate(
+            {
+                "snapshot_id": "snapshot-1",
+                "query": "where are sections loaded?",
+                "top_k": 3,
+                "filters": {"languages": ["go", "go", ""], "include_tests": False},
+            }
+        ),
+        searcher=searcher,
+    )
+
+    assert store.calls[0]["filters"] == CodeChunkSearchFilters(languages=("go",), include_tests=False)
+
+
+class FakeEmbeddingProvider:
+    provider = "fake"
+    model = "fake-model"
+    dimension = 3
+    batch_size = 2
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def embed_documents(self, texts):
+        raise NotImplementedError
+
+    def embed_query(self, text: str) -> list[float]:
+        self.queries.append(text)
+        return [0.1, 0.2, 0.3]
+
+
+class FailingEmbeddingProvider(FakeEmbeddingProvider):
+    def embed_query(self, text: str) -> list[float]:
+        raise EmbeddingProviderError("service unavailable")
+
+
+class FakeSearchStore:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def search_snapshot_chunks(
+        self,
+        *,
+        snapshot_id: str,
+        query_vector: list[float],
+        limit: int,
+        filters: CodeChunkSearchFilters | None = None,
+        score_threshold: float | None = None,
+    ) -> tuple[CodeChunkSearchHit, ...]:
+        self.calls.append(
+            {
+                "snapshot_id": snapshot_id,
+                "query_vector": query_vector,
+                "limit": limit,
+                "filters": filters,
+                "score_threshold": score_threshold,
+            }
+        )
+        return (
+            CodeChunkSearchHit(
+                point_id="chunk-1",
+                score=0.91,
+                payload={
+                    "chunk_id": "chunk-1",
+                    "snapshot_id": snapshot_id,
+                    "repository_id": "repo-1",
+                    "commit_sha": "a" * 40,
+                    "file_path": "backend/repo.go",
+                    "language": "go",
+                    "kind": "method",
+                    "chunk_kind": "go_symbol",
+                    "is_test": False,
+                    "source_scope": "runtime",
+                    "text": "func Get(ctx context.Context) ([]Section, error)",
+                    "workspace_unit_id": "backend:api",
+                    "package_id": "example/backend#postgres",
+                    "package": {
+                        "package_id": "example/backend#postgres",
+                        "name": "postgres",
+                        "import_path": "example/backend",
+                        "dir_path": "backend",
+                        "module_path": "example",
+                    },
+                    "name": "postgres.Repository.Get",
+                    "start_line": 20,
+                    "end_line": 50,
+                    "symbol_id": "symbol-1",
+                    "symbol_signature": "func Get(ctx context.Context) ([]Section, error)",
+                },
+            ),
+        )
+
+
+class FakeQdrantPoint:
+    id = "point-1"
+    score = 0.91
+    payload = {"chunk_id": "chunk-1", "snapshot_id": "snapshot-1"}
+
+
+class FakeQdrantQueryResponse:
+    points = [FakeQdrantPoint()]
+
+
+class FakeQdrantSearchClient:
+    def __init__(self) -> None:
+        self.query: dict[str, object] = {}
+
+    def query_points(self, **kwargs) -> FakeQdrantQueryResponse:
+        self.query = kwargs
+        return FakeQdrantQueryResponse()

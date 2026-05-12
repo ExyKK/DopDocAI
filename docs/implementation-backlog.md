@@ -749,10 +749,11 @@
 
 ### RAG-004 — Реализовать retrieval API по `snapshot_id`
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `RAG-003`, `RAG-004A`, `RAG-004C`
 - Goal: chats и docs не должны знать про коллекции и qdrant payload details.
 - Tasks:
-- реализовать внутренний endpoint `POST /internal/retrieval/search`;
+- реализовать внутренний endpoint `POST /internal/v1/retrieval/search`;
 - принимать `snapshot_id`, `query`, `top_k`, optional filters;
 - возвращать normalized source DTO;
 - добавить latency metrics.
@@ -769,6 +770,21 @@
 - добавить rerank heuristic без отдельного ML reranker.
 - Acceptance:
 - вопросы по символам, пакетам и конкретным файлам отвечаются стабильнее.
+
+### RAG-006 — Добавить token-aware chunking и length-bucketed embedding
+- Priority: `P1`
+- Depends on: `RAG-004`, `RAG-004A`
+- Goal: ускорить real embedding runs и снизить потери от `EMBED_MAX_SEQ_LENGTH` без смены модели.
+- Tasks:
+- добавить token-length audit/diagnostics для retrieval chunks;
+- исключить низкоценные retrieval inputs вроде статических SVG/assets и mock/sample data;
+- дробить overlong chunks на token-aware windows с overlap вместо грубой line-based нарезки;
+- группировать chunks по длине перед batch embedding, сохраняя deterministic chunk/vector alignment;
+- записывать token length/truncation-risk counters в `index_runs.StatsJson`.
+- Acceptance:
+- `image-board`/`cobra`-class repositories индексируются быстрее при том же `jina-code-embeddings-0.5b`;
+- chunks, которые превышают `EMBED_MAX_SEQ_LENGTH`, не теряют полезный хвост без явного split;
+- retrieval chunk payload remains source-complete для downstream citations.
 
 ## Epic CHAT — ChatService
 
@@ -1131,7 +1147,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004C`. Следующий RAG-срез — `RAG-004` internal retrieval API по `snapshot_id`, уже через `EmbeddingProvider` abstraction; `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-004`. Следующий выбор зависит от цели: `RAG-005` для качества retrieval, `RAG-006` для скорости/качества embedding pipeline на реальных репозиториях, либо `CHAT-002`/`CHAT-003` для выхода в end-to-end chat use case. `INGEST-023` можно отложить до diff-aware docs generation.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
@@ -1161,14 +1177,16 @@
 24. `RAG-004B`
 25. `RAG-004C`
 26. `RAG-004`
-27. `REPO-004`
-28. `CHAT-001`
-29. `CHAT-002`
-30. `CHAT-003`
-31. `GATEWAY-001`
-32. `GATEWAY-002`
-33. `TEST-001`
-34. `TEST-002`
+27. `RAG-005`
+28. `RAG-006`
+29. `REPO-004`
+30. `CHAT-001`
+31. `CHAT-002`
+32. `CHAT-003`
+33. `GATEWAY-001`
+34. `GATEWAY-002`
+35. `TEST-001`
+36. `TEST-002`
 
 После этого проект уже сможет:
 

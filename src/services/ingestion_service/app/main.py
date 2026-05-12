@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from app.api.deps import get_treesitter
+from app.api.routes.retrieval import router as retrieval_router
 from app.core.config import settings
 
 logger = logging.getLogger("ingestion_service")
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.service_name, lifespan=lifespan)
+    app.include_router(retrieval_router)
 
     @app.get("/health")
     async def healthcheck():
