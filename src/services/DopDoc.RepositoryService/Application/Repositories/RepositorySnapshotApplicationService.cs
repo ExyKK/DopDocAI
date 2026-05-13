@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DopDoc.Common.Errors;
+using DopDoc.RepositoryService.Application.Jobs;
 using DopDoc.RepositoryService.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -59,6 +60,34 @@ public sealed class RepositorySnapshotApplicationService
 
         if (snapshot is null)
             throw SnapshotNotFound(snapshotId);
+
+        return snapshot;
+    }
+
+    public async Task<RepositorySnapshotEntity> GetReadyAsync(
+        Guid userId,
+        Guid repositoryId,
+        Guid? snapshotId,
+        CancellationToken ct)
+    {
+        await EnsureUserCanAccessRepositoryAsync(userId, repositoryId, ct);
+
+        if (snapshotId is not null)
+            return await GetReadyByIdAsync(repositoryId, snapshotId.Value, ct);
+
+        var snapshot = await (
+                from run in _db.IndexRuns.AsNoTracking()
+                join item in _db.RepositorySnapshots.AsNoTracking()
+                    on run.SnapshotId equals item.Id
+                where run.RepositoryId == repositoryId &&
+                      run.SnapshotId != null &&
+                      run.Status == JobRunStatuses.Succeeded
+                orderby run.FinishedAt ?? run.UpdatedAt descending
+                select item)
+            .FirstOrDefaultAsync(ct);
+
+        if (snapshot is null)
+            throw SnapshotNotReady(repositoryId);
 
         return snapshot;
     }
@@ -201,6 +230,32 @@ public sealed class RepositorySnapshotApplicationService
             throw RepositoryNotFound(repositoryId);
     }
 
+    private async Task<RepositorySnapshotEntity> GetReadyByIdAsync(
+        Guid repositoryId,
+        Guid snapshotId,
+        CancellationToken ct)
+    {
+        var snapshot = await _db.RepositorySnapshots
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RepositoryId == repositoryId && x.Id == snapshotId, ct);
+
+        if (snapshot is null)
+            throw SnapshotNotFound(snapshotId);
+
+        var isReady = await _db.IndexRuns
+            .AsNoTracking()
+            .AnyAsync(x =>
+                x.RepositoryId == repositoryId &&
+                x.SnapshotId == snapshotId &&
+                x.Status == JobRunStatuses.Succeeded,
+                ct);
+
+        if (!isReady)
+            throw SnapshotNotReady(repositoryId, snapshotId);
+
+        return snapshot;
+    }
+
     private static void ValidateSnapshotCommand(UpsertRepositorySnapshotCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.CommitSha))
@@ -301,6 +356,15 @@ public sealed class RepositorySnapshotApplicationService
         return new NotFoundException(
             $"Repository snapshot {snapshotId} was not found.",
             errorCode: "repository_snapshot_not_found");
+    }
+
+    private static ConflictException SnapshotNotReady(Guid repositoryId, Guid? snapshotId = null)
+    {
+        var detail = snapshotId is null
+            ? $"Repository {repositoryId} does not have a ready indexed snapshot."
+            : $"Repository snapshot {snapshotId} is not ready for retrieval-backed consumers.";
+
+        return new ConflictException(detail, errorCode: "repository_snapshot_not_ready");
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

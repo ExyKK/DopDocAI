@@ -1,6 +1,7 @@
 using DopDoc.ChatService.Api.Contracts;
-using DopDoc.Common.Errors;
+using DopDoc.ChatService.Application.Chats;
 using DopDoc.Common.UserContext;
+using Microsoft.AspNetCore.Mvc;
 
 namespace DopDoc.ChatService.Api;
 
@@ -10,39 +11,79 @@ public static class ChatEndpoints
     {
         var g = app.MapGroup("/api/v1/chats").WithTags("chats");
 
-        g.MapGet("", (int limit, int offset, IUserContextAccessor userContext) =>
+        g.MapPost("", async (
+            CreateChatRequest request,
+            IUserContextAccessor userContext,
+            ChatApplicationService chats,
+            CancellationToken ct) =>
         {
-            ValidatePagination(limit, offset);
-            _ = userContext.GetRequiredUserId();
+            var userId = userContext.GetRequiredUserId();
+            var chat = await chats.CreateAsync(userId, ChatContractMapper.ToCommand(request), ct);
+            var response = ChatContractMapper.ToResponse(chat);
+            return Results.Created($"/api/v1/chats/{response.Id}", response);
+        })
+        .WithName("CreateChat");
 
-            var response = new PagedResponse<ChatListItemResponse>(
-                Items: [],
-                Limit: limit,
-                Offset: offset,
-                HasMore: false,
-                TotalCount: 0);
-
-            return TypedResults.Ok(response);
+        g.MapGet("", async (
+            [FromQuery(Name = "repository_id")] Guid? repositoryId,
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            ChatApplicationService chats,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = ChatPagination.Validate(limit, offset);
+            var page = await chats.ListAsync(userId, repositoryId, pagination, ct);
+            return TypedResults.Ok(ChatContractMapper.ToPagedResponse(page));
         })
         .WithName("ListChats");
 
+        g.MapGet("/{chat_id:guid}", async (
+            [FromRoute(Name = "chat_id")] Guid chatId,
+            IUserContextAccessor userContext,
+            ChatApplicationService chats,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var chat = await chats.GetAsync(userId, chatId, ct);
+            return TypedResults.Ok(ChatContractMapper.ToResponse(chat));
+        })
+        .WithName("GetChat");
+
+        g.MapGet("/{chat_id:guid}/messages", async (
+            [FromRoute(Name = "chat_id")] Guid chatId,
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            ChatApplicationService chats,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = ChatPagination.Validate(limit, offset);
+            var page = await chats.ListMessagesAsync(userId, chatId, pagination, ct);
+            return TypedResults.Ok(ChatContractMapper.ToPagedResponse(page));
+        })
+        .WithName("ListChatMessages");
+
+        g.MapPost("/{chat_id:guid}/messages", async (
+            [FromRoute(Name = "chat_id")] Guid chatId,
+            SendChatMessageRequest request,
+            IUserContextAccessor userContext,
+            ChatApplicationService chats,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var result = await chats.SendMessageAsync(
+                userId,
+                chatId,
+                ChatContractMapper.ToCommand(request),
+                ct);
+
+            return TypedResults.Ok(ChatContractMapper.ToResponse(result));
+        })
+        .WithName("SendChatMessage");
+
         return g;
-    }
-
-    private static void ValidatePagination(int limit, int offset)
-    {
-        if (limit is < 1 or > 200)
-        {
-            throw new ValidationException(
-                "limit must be between 1 and 200",
-                errorCode: "limit_out_of_range");
-        }
-
-        if (offset < 0)
-        {
-            throw new ValidationException(
-                "offset must be greater than or equal to 0",
-                errorCode: "offset_out_of_range");
-        }
     }
 }

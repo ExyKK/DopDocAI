@@ -325,6 +325,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      repository_service:
+        condition: service_started
+      ingestion_service:
+        condition: service_started
       otel_collector:
         condition: service_started
 
@@ -373,6 +377,23 @@ services:
     environment:
       ConnectionStrings__ChatDb: ${CHAT_DB_CONNECTION}
       Db__Schema: chat
+      RepositoryService__BaseUrl: http://repository_service:19200
+      RepositoryService__TimeoutSeconds: 10
+      Retrieval__BaseUrl: http://ingestion_service:19100
+      Retrieval__TimeoutSeconds: 60
+      Retrieval__TopK: ${CHAT_RETRIEVAL_TOP_K:-8}
+      Retrieval__IncludeTests: ${CHAT_RETRIEVAL_INCLUDE_TESTS:-true}
+      Llm__Provider: ${CHAT_LLM_PROVIDER:-stub}
+      Llm__Endpoint: ${CHAT_LLM_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      Llm__ApiKey: ${CHAT_LLM_API_KEY:-}
+      Llm__Model: ${CHAT_LLM_MODEL:-deepseek/deepseek-v3.2}
+      Llm__TimeoutSeconds: ${CHAT_LLM_TIMEOUT_SECONDS:-60}
+      Llm__Temperature: ${CHAT_LLM_TEMPERATURE:-0.2}
+      Llm__MaxTokens: ${CHAT_LLM_MAX_TOKENS:-1536}
+      Llm__TopP: ${CHAT_LLM_TOP_P:-0.95}
+      Llm__RepetitionPenalty: ${CHAT_LLM_REPETITION_PENALTY:-1.05}
+      Llm__HistoryLimit: ${CHAT_LLM_HISTORY_LIMIT:-20}
+      Llm__MaxSourceChars: ${CHAT_LLM_MAX_SOURCE_CHARS:-24000}
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: ChatDb

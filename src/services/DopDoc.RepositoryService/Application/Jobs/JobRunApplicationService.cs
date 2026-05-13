@@ -107,27 +107,14 @@ public sealed class JobRunApplicationService
         if (repository is null)
             throw RepositoryNotFound(repositoryId);
 
-        var snapshotId = command.SnapshotId ?? repository.ActiveSnapshotId;
-        if (snapshotId is null)
-        {
-            throw new ConflictException(
-                "Repository has no active snapshot. Index the repository before generating documentation.",
-                errorCode: "repository_snapshot_required");
-        }
-
-        var snapshot = await _db.RepositorySnapshots
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.RepositoryId == repositoryId && x.Id == snapshotId, ct);
-
-        if (snapshot is null)
-            throw SnapshotNotFound(snapshotId.Value);
+        var readySnapshot = await FindReadySnapshotAsync(repositoryId, command.SnapshotId, ct);
+        var snapshot = readySnapshot.Snapshot;
 
         var templateKind = NormalizeTemplateKind(command.TemplateKind);
         var activeRun = await FindActiveDocumentationRunAsync(repositoryId, snapshot.Id, templateKind, ct);
         if (activeRun is not null)
             return new DocumentationRunCreateResult(activeRun, Created: false);
 
-        var sourceIndexRunId = await FindLatestSucceededIndexRunIdAsync(repositoryId, snapshot.Id, ct);
         var now = DateTimeOffset.UtcNow;
 
         var run = new DocumentationRun
@@ -135,7 +122,7 @@ public sealed class JobRunApplicationService
             Id = Guid.NewGuid(),
             RepositoryId = repositoryId,
             SnapshotId = snapshot.Id,
-            SourceIndexRunId = sourceIndexRunId,
+            SourceIndexRunId = readySnapshot.SourceIndexRunId,
             BaseSnapshotId = command.BaseSnapshotId,
             RequestedByUserId = userId,
             TemplateKind = templateKind,
@@ -208,6 +195,44 @@ public sealed class JobRunApplicationService
             .FirstOrDefaultAsync(ct);
     }
 
+    private async Task<ReadySnapshotResult> FindReadySnapshotAsync(
+        Guid repositoryId,
+        Guid? snapshotId,
+        CancellationToken ct)
+    {
+        if (snapshotId is not null)
+        {
+            var snapshot = await _db.RepositorySnapshots
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.RepositoryId == repositoryId && x.Id == snapshotId, ct);
+
+            if (snapshot is null)
+                throw SnapshotNotFound(snapshotId.Value);
+
+            var sourceIndexRunId = await FindLatestSucceededIndexRunIdAsync(repositoryId, snapshot.Id, ct);
+            if (sourceIndexRunId is null)
+                throw SnapshotNotReady(repositoryId, snapshot.Id);
+
+            return new ReadySnapshotResult(snapshot, sourceIndexRunId.Value);
+        }
+
+        var ready = await (
+                from run in _db.IndexRuns.AsNoTracking()
+                join snapshot in _db.RepositorySnapshots.AsNoTracking()
+                    on run.SnapshotId equals snapshot.Id
+                where run.RepositoryId == repositoryId &&
+                      run.SnapshotId != null &&
+                      run.Status == JobRunStatuses.Succeeded
+                orderby run.FinishedAt ?? run.UpdatedAt descending
+                select new ReadySnapshotResult(snapshot, run.Id))
+            .FirstOrDefaultAsync(ct);
+
+        if (ready is null)
+            throw SnapshotNotReady(repositoryId);
+
+        return ready;
+    }
+
     private async Task<Guid?> FindLatestSucceededIndexRunIdAsync(Guid repositoryId, Guid snapshotId, CancellationToken ct)
     {
         return await _db.IndexRuns
@@ -251,6 +276,15 @@ public sealed class JobRunApplicationService
             errorCode: "repository_snapshot_not_found");
     }
 
+    private static ConflictException SnapshotNotReady(Guid repositoryId, Guid? snapshotId = null)
+    {
+        var detail = snapshotId is null
+            ? $"Repository {repositoryId} does not have a ready indexed snapshot."
+            : $"Repository snapshot {snapshotId} is not ready for documentation generation.";
+
+        return new ConflictException(detail, errorCode: "repository_snapshot_not_ready");
+    }
+
     private static NotFoundException IndexRunNotFound(Guid indexRunId)
     {
         return new NotFoundException(
@@ -269,4 +303,6 @@ public sealed class JobRunApplicationService
     {
         return ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
     }
+
+    private sealed record ReadySnapshotResult(RepositorySnapshot Snapshot, Guid SourceIndexRunId);
 }

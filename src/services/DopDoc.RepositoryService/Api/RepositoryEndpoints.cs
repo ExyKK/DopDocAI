@@ -88,6 +88,19 @@ public static class RepositoryEndpoints
         })
         .WithName("GetRepositorySnapshot");
 
+        g.MapGet("/{repository_id:guid}/snapshots/ready", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromQuery(Name = "snapshot_id")] Guid? snapshotId,
+            IUserContextAccessor userContext,
+            RepositorySnapshotApplicationService snapshots,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var snapshot = await snapshots.GetReadyAsync(userId, repositoryId, snapshotId, ct);
+            return TypedResults.Ok(RepositoryContractMapper.ToResponse(snapshot));
+        })
+        .WithName("GetReadyRepositorySnapshot");
+
         g.MapPost("/{repository_id:guid}/documentation", async (
             [FromRoute(Name = "repository_id")] Guid repositoryId,
             CreateDocumentationRunRequest request,

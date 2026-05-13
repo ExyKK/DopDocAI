@@ -803,17 +803,21 @@
 
 ### CHAT-002 — Реализовать chat CRUD
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `CHAT-001`, `REPO-003`
 - Goal: создавать и читать snapshot-bound чаты.
 - Tasks:
 - реализовать `POST /chats`, `GET /chats`, `GET /chats/{id}`, `GET /chats/{id}/messages`;
 - при создании чата принимать `repository_id` и optional `snapshot_id`;
-- если `snapshot_id` не передан, выбирать последний ready snapshot.
+- если `snapshot_id` не передан, выбирать последний ready snapshot;
+- проверять repository/snapshot ownership через `RepositoryService` typed client;
+- использовать `RepositoryService` ready snapshot lookup, чтобы chat не привязывался к snapshot без successful `index_run`.
 - Acceptance:
-- chat всегда знает, к какому snapshot относится.
+- chat всегда знает, к какому snapshot относится, а public API не принимает `user_id` в body/query.
 
 ### CHAT-003 — Реализовать send message pipeline
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `CHAT-002`, `RAG-004`
 - Goal: восстановить основной use case чата на новой архитектуре.
 - Tasks:
@@ -821,9 +825,10 @@
 - выполнить retrieval через `snapshot_id`;
 - собрать prompt c жесткими source rules;
 - вызвать LLM provider;
-- сохранить `chat_messages` и `chat_message_sources`.
+- сохранить `chat_messages` и `chat_message_sources`;
+- поддержать `stub` dev provider и OpenAI/OpenRouter-compatible provider через конфиг.
 - Acceptance:
-- пользователь может задавать вопросы по snapshot и получать grounded answer с источниками.
+- пользователь может задавать вопросы по snapshot и получать grounded answer с источниками через `POST /api/v1/chats/{chat_id}/messages`.
 
 ### CHAT-004 — Реализовать usage and source persistence
 - Priority: `P1`
@@ -1149,7 +1154,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`. Следующий выбор зависит от цели: `RAG-006` для скорости/качества embedding pipeline на реальных репозиториях, либо `CHAT-002`/`CHAT-003` для выхода в end-to-end chat use case. `INGEST-023` можно отложить до diff-aware docs generation.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005` и `CHAT-002`/`CHAT-003`. `RAG-006` осознанно отложен; для максимально быстрого перехода к генерации документации следующий практичный шаг — `JOBS-003` + `DOCS-001`, затем `DOCS-002`/`DOCS-003`/`DOCS-004`.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 
