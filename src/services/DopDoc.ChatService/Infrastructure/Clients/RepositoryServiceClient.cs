@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using DopDoc.ChatService.Application.Chats;
+using DopDoc.ChatService.Application.Snapshots;
 using DopDoc.Common.Errors;
 using DopDoc.Common.UserContext;
 using Microsoft.Extensions.Options;
@@ -23,7 +24,7 @@ public sealed class RepositoryServiceClient
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
-    public async Task<RepositoryServiceSnapshot> GetReadySnapshotAsync(
+    public async Task<ReadySnapshotRef> GetReadySnapshotAsync(
         Guid userId,
         Guid repositoryId,
         Guid? snapshotId,
@@ -50,10 +51,15 @@ public sealed class RepositoryServiceClient
         if (!response.IsSuccessStatusCode)
             throw await UpstreamFailureAsync(response, "RepositoryService ready snapshot lookup failed.", ct);
 
-        return await response.Content.ReadFromJsonAsync<RepositoryServiceSnapshot>(cancellationToken: ct)
-               ?? throw new UpstreamServiceException(
-                   "RepositoryService returned an empty ready snapshot response.",
-                   errorCode: "repository_service_response_invalid");
+        var snapshot = await response.Content.ReadFromJsonAsync<RepositorySnapshotResponse>(cancellationToken: ct)
+                       ?? throw new UpstreamServiceException(
+                           "RepositoryService returned an empty ready snapshot response.",
+                           errorCode: "repository_service_response_invalid");
+
+        return new ReadySnapshotRef(
+            RepositoryId: snapshot.RepositoryId,
+            SnapshotId: snapshot.Id,
+            CommitSha: snapshot.CommitSha);
     }
 
     private static void AddUserContext(HttpRequestMessage request, Guid userId)
@@ -88,9 +94,8 @@ public sealed class RepositoryServiceClient
     }
 }
 
-public sealed record RepositoryServiceSnapshot(
+internal sealed record RepositorySnapshotResponse(
     [property: JsonPropertyName("id")] Guid Id,
     [property: JsonPropertyName("repository_id")] Guid RepositoryId,
-    [property: JsonPropertyName("branch_name")] string BranchName,
     [property: JsonPropertyName("commit_sha")] string CommitSha
 );

@@ -812,6 +812,7 @@
 - если `snapshot_id` не передан, выбирать последний ready snapshot;
 - проверять repository/snapshot ownership через `RepositoryService` typed client;
 - использовать `RepositoryService` ready snapshot lookup, чтобы chat не привязывался к snapshot без successful `index_run`.
+- держать CRUD-логику отдельно от message/retrieval pipeline, чтобы создание чата не тянуло за собой prompt/LLM concerns.
 - Acceptance:
 - chat всегда знает, к какому snapshot относится, а public API не принимает `user_id` в body/query.
 
@@ -827,6 +828,7 @@
 - вызвать LLM provider;
 - сохранить `chat_messages` и `chat_message_sources`;
 - поддержать `stub` dev provider и OpenAI/OpenRouter-compatible provider через конфиг.
+- скрыть HTTP wire contracts RepositoryService/RetrievalService за typed clients и компактными application models.
 - Acceptance:
 - пользователь может задавать вопросы по snapshot и получать grounded answer с источниками через `POST /api/v1/chats/{chat_id}/messages`.
 

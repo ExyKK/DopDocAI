@@ -14,7 +14,7 @@ public static class ChatEndpoints
         g.MapPost("", async (
             CreateChatRequest request,
             IUserContextAccessor userContext,
-            ChatApplicationService chats,
+            ChatCrudService chats,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
@@ -29,7 +29,7 @@ public static class ChatEndpoints
             [FromQuery] int? limit,
             [FromQuery] int? offset,
             IUserContextAccessor userContext,
-            ChatApplicationService chats,
+            ChatCrudService chats,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
@@ -42,7 +42,7 @@ public static class ChatEndpoints
         g.MapGet("/{chat_id:guid}", async (
             [FromRoute(Name = "chat_id")] Guid chatId,
             IUserContextAccessor userContext,
-            ChatApplicationService chats,
+            ChatCrudService chats,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
@@ -56,7 +56,7 @@ public static class ChatEndpoints
             [FromQuery] int? limit,
             [FromQuery] int? offset,
             IUserContextAccessor userContext,
-            ChatApplicationService chats,
+            ChatCrudService chats,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
@@ -70,11 +70,11 @@ public static class ChatEndpoints
             [FromRoute(Name = "chat_id")] Guid chatId,
             SendChatMessageRequest request,
             IUserContextAccessor userContext,
-            ChatApplicationService chats,
+            ChatMessageService messages,
             CancellationToken ct) =>
         {
             var userId = userContext.GetRequiredUserId();
-            var result = await chats.SendMessageAsync(
+            var result = await messages.SendAsync(
                 userId,
                 chatId,
                 ChatContractMapper.ToCommand(request),

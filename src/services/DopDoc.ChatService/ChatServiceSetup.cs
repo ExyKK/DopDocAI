@@ -81,7 +81,9 @@ public static class ChatServiceSetup
                 "Llm:MaxSourceChars must be greater than 0")
             .ValidateOnStart();
 
-        services.AddScoped<ChatApplicationService>();
+        services.AddScoped<ChatCrudService>();
+        services.AddScoped<ChatMessageService>();
+        services.AddSingleton<ChatPromptFactory>();
         services.AddHttpClient<RepositoryServiceClient>();
         services.AddHttpClient<RetrievalServiceClient>();
         services.AddHttpClient<OpenAiCompatibleChatCompletionProvider>();
