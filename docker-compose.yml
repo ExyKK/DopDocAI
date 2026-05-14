@@ -249,41 +249,6 @@ services:
       minio_init:
         condition: service_completed_successfully
 
-#  chats_service:
-#    build:
-#      context: .
-#      dockerfile: backend/chats_service/Dockerfile.dev
-#    container_name: dopdoc_chats_service
-#    environment:
-#      CHATS_DATABASE_URL: postgresql+psycopg://dopdoc:dopdoc@postgres:5432/dopdoc
-#      CHATS_DB_SCHEMA: "chats"
-#      CHATS_REPOS_SERVICE_URL: http://repos_service:19300
-#      CHATS_INGESTION_SERVICE_URL: http://ingestion_service:19100
-#      CHATS_PORT: 19400
-#
-#      CHATS_LLM_ROUTER_API: https://openrouter.ai/api/v1/chat/completions
-#      CHATS_LLM_API_KEY: ""
-#      CHATS_LLM_MODEL: "deepseek/deepseek-v3.2"
-#      CHATS_LLM_TEMPERATURE: "0.2"
-#      CHATS_LLM_MAX_TOKENS: "1536"
-#      CHATS_LLM_TOP_P: "0.95"
-#      CHATS_LLM_REPETITION_PENALTY: "1.05"
-#      CHATS_LLM_HISTORY_LIMIT: "20"
-#      CHATS_LLM_DEFAULT_SYSTEM_PROMPT: "You are a helpful assistant."
-#      CHATS_RAG_TOP_K: "8"
-#
-#      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
-#      OTEL_SERVICE_NAME: chats_service
-#    ports:
-#      - "19400:19400"
-#    volumes:
-#      - ./backend/chats_service:/app/backend/chats_service
-#    depends_on:
-#      postgres:
-#        condition: service_healthy
-#      ingestion_service:
-#        condition: service_started
-
   auth_service:
     build:
       context: .
