@@ -268,12 +268,14 @@
 
 ### JOBS-003 — Реализовать claim loop для `documentation_runs`
 - Priority: `P1`
+- Status: `completed`
 - Depends on: `JOBS-001`
 - Goal: переиспользовать тот же execution pattern для docs generation.
 - Tasks:
 - повторно использовать общий claim/lease/heartbeat infrastructure;
 - реализовать docs-specific stage transitions;
 - покрыть сценарии retry и stale detection.
+- scaffold реализован в `documentation_service`: claim через `FOR UPDATE SKIP LOCKED`, heartbeat/lease, reclaim expired running jobs и перевод exhausted expired jobs в `stale`.
 - Acceptance:
 - docs jobs живут по той же модели, что и index jobs.
 
@@ -858,12 +860,14 @@
 
 ### DOCS-001 — Создать `documentation_service` scaffold
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DATA-001`, `JOBS-003`
 - Goal: поднять отдельный Python сервис/worker для генерации документации.
 - Tasks:
 - создать структуру проекта и docker image;
 - реализовать worker entrypoint для `documentation_runs`;
 - подключить Postgres, MinIO, observability.
+- текущий worker работает в scaffold-only режиме: claim-ит run, проходит docs stages и завершает с `VerificationSummaryJson.scaffold_only=true`; sections/artifacts начинаются в `DOCS-002`.
 - Acceptance:
 - сервис стартует и может claim-ить jobs.
 
@@ -1156,7 +1160,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005` и `CHAT-002`/`CHAT-003`. `RAG-006` осознанно отложен; для максимально быстрого перехода к генерации документации следующий практичный шаг — `JOBS-003` + `DOCS-001`, затем `DOCS-002`/`DOCS-003`/`DOCS-004`.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`, `CHAT-002`/`CHAT-003` и `JOBS-003`/`DOCS-001`. `RAG-006` осознанно отложен; для максимально быстрого перехода к генерации документации следующий практичный шаг — `DOCS-002` + `DOCS-003`, затем `DOCS-004`.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

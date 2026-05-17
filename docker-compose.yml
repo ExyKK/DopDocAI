@@ -249,6 +249,70 @@ services:
       minio_init:
         condition: service_completed_successfully
 
+  documentation_service:
+    build:
+      context: .
+      dockerfile: src/services/documentation_service/Dockerfile
+    container_name: dopdoc_documentation_service
+    environment:
+      DOCS_DATABASE_URL: ${DOCS_DATABASE_URL}
+      DOCS_REPO_DB_SCHEMA: repo
+      DOCS_PORT: 19500
+
+      DOPDOC_S3_ENDPOINT: http://minio:9000
+      DOPDOC_S3_ACCESS_KEY: dopdoc
+      DOPDOC_S3_SECRET_KEY: dopdocstorage
+      DOPDOC_S3_BUCKET: dopdoc-artifacts
+      DOPDOC_S3_REGION: us-east-1
+
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: documentation_service
+    ports:
+      - "19500:19500"
+    volumes:
+      - ./src/services/documentation_service:/app/src/services/documentation_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio_init:
+        condition: service_completed_successfully
+
+  documentation_worker:
+    build:
+      context: .
+      dockerfile: src/services/documentation_service/Dockerfile
+    container_name: dopdoc_documentation_worker
+    command: ["documentation-worker"]
+    environment:
+      DOCS_DATABASE_URL: ${DOCS_DATABASE_URL}
+      DOCS_REPO_DB_SCHEMA: repo
+      DOCS_WORKER_POLL_INTERVAL_S: "3"
+      DOCS_WORKER_LEASE_SECONDS: "120"
+      DOCS_WORKER_HEARTBEAT_SECONDS: "15"
+      DOCS_S3_VALIDATE_ON_START: "true"
+
+      DOPDOC_S3_ENDPOINT: http://minio:9000
+      DOPDOC_S3_ACCESS_KEY: dopdoc
+      DOPDOC_S3_SECRET_KEY: dopdocstorage
+      DOPDOC_S3_BUCKET: dopdoc-artifacts
+      DOPDOC_S3_REGION: us-east-1
+
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel_collector:4317
+      OTEL_SERVICE_NAME: documentation_worker
+    volumes:
+      - ./src/services/documentation_service:/app/src/services/documentation_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      repository_service:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      minio_init:
+        condition: service_completed_successfully
+
   auth_service:
     build:
       context: .
