@@ -257,6 +257,8 @@ services:
     environment:
       DOCS_DATABASE_URL: ${DOCS_DATABASE_URL}
       DOCS_REPO_DB_SCHEMA: repo
+      DOCS_REPOS_SERVICE_URL: http://repository_service:19200
+      DOCS_RETRIEVAL_SERVICE_URL: http://ingestion_service:19100
       DOCS_PORT: 19500
 
       DOPDOC_S3_ENDPOINT: http://minio:9000
@@ -288,6 +290,13 @@ services:
     environment:
       DOCS_DATABASE_URL: ${DOCS_DATABASE_URL}
       DOCS_REPO_DB_SCHEMA: repo
+      DOCS_REPOS_SERVICE_URL: http://repository_service:19200
+      DOCS_REQUEST_TIMEOUT_S: "10"
+      DOCS_RETRIEVAL_SERVICE_URL: http://ingestion_service:19100
+      DOCS_RETRIEVAL_REQUEST_TIMEOUT_S: "60"
+      DOCS_RETRIEVAL_ENABLED: ${DOCS_RETRIEVAL_ENABLED:-true}
+      DOCS_RETRIEVAL_TOP_K: ${DOCS_RETRIEVAL_TOP_K:-5}
+      DOCS_RETRIEVAL_INCLUDE_TESTS: ${DOCS_RETRIEVAL_INCLUDE_TESTS:-true}
       DOCS_WORKER_POLL_INTERVAL_S: "3"
       DOCS_WORKER_LEASE_SECONDS: "120"
       DOCS_WORKER_HEARTBEAT_SECONDS: "15"
@@ -307,6 +316,8 @@ services:
       postgres:
         condition: service_healthy
       repository_service:
+        condition: service_started
+      ingestion_service:
         condition: service_started
       minio:
         condition: service_healthy

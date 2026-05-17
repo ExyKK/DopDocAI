@@ -1,3 +1,4 @@
+import json
 from urllib.parse import urlparse
 
 from minio import Minio
@@ -48,3 +49,24 @@ class ObjectStorageClient:
                 self._client.make_bucket(self._bucket)
         except S3Error as exc:
             raise ObjectStorageError(f"Could not ensure bucket {self._bucket}: {exc}") from exc
+
+    def get_json(self, key: str, *, bucket: str | None = None, max_bytes: int = 20_000_000):
+        bucket_name = bucket or self._bucket
+        response = None
+        try:
+            response = self._client.get_object(bucket_name, key)
+            data = response.read(max_bytes + 1)
+        except S3Error as exc:
+            raise ObjectStorageError(f"Could not read object {bucket_name}/{key}: {exc}") from exc
+        finally:
+            if response is not None:
+                response.close()
+                response.release_conn()
+
+        if len(data) > max_bytes:
+            raise ObjectStorageError(f"Object {bucket_name}/{key} exceeds max readable JSON size")
+
+        try:
+            return json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ObjectStorageError(f"Object {bucket_name}/{key} is not valid JSON: {exc}") from exc

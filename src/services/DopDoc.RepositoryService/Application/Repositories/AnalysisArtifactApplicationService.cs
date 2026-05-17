@@ -122,6 +122,26 @@ public sealed class AnalysisArtifactApplicationService
         return new AnalysisArtifactUpsertResult(artifact, created);
     }
 
+    public async Task<IReadOnlyList<AnalysisArtifact>> ListAsync(
+        Guid repositoryId,
+        Guid snapshotId,
+        CancellationToken ct)
+    {
+        var snapshotExists = await _db.RepositorySnapshots
+            .AsNoTracking()
+            .AnyAsync(x => x.RepositoryId == repositoryId && x.Id == snapshotId, ct);
+
+        if (!snapshotExists)
+            throw SnapshotNotFound(snapshotId);
+
+        return await _db.AnalysisArtifacts
+            .AsNoTracking()
+            .Where(x => x.SnapshotId == snapshotId)
+            .OrderBy(x => x.ArtifactKind)
+            .ThenByDescending(x => x.SchemaVersion)
+            .ToListAsync(ct);
+    }
+
     private static void ValidateCommand(UpsertAnalysisArtifactCommand command)
     {
         if (command.ProducedByIndexRunId == Guid.Empty)

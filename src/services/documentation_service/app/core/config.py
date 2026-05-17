@@ -10,6 +10,15 @@ class Settings(BaseSettings):
     port: int = 19500
     reload: bool = False
 
+    repos_service_url: str = "http://localhost:19200"
+    request_timeout_s: float = 10.0
+    retrieval_service_url: str = "http://localhost:19100"
+    retrieval_request_timeout_s: float = 60.0
+    retrieval_enabled: bool = True
+    retrieval_top_k: int = 5
+    retrieval_include_tests: bool = True
+    retrieval_score_threshold: float | None = None
+
     database_url: str = "postgresql://dopdoc:dopdoc@localhost:5432/dopdoc"
     repo_db_schema: str = "repo"
 

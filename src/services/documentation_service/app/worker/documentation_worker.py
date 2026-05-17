@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from app.worker.job_store import ClaimedDocumentationRun, DocumentationRunStore, LeaseLostError
 
@@ -62,9 +63,11 @@ class DocumentationWorker:
     def __init__(
         self,
         store: DocumentationRunStore,
+        planning_pipeline: Any,
         worker_settings: WorkerSettings,
     ):
         self._store = store
+        self._planning_pipeline = planning_pipeline
         self._settings = worker_settings
 
     def run_once(self) -> bool:
@@ -110,8 +113,17 @@ class DocumentationWorker:
                     run.id,
                     self._settings.worker_id,
                     "planning_sections",
-                    45,
+                    35,
                 )
+                heartbeat.ensure_alive()
+
+                self._store.update_progress(
+                    run.id,
+                    self._settings.worker_id,
+                    "retrieving_evidence",
+                    65,
+                )
+                plan = self._planning_pipeline.build_section_plan(run)
                 heartbeat.ensure_alive()
 
                 self._store.update_progress(
@@ -119,21 +131,17 @@ class DocumentationWorker:
                     self._settings.worker_id,
                     "finalizing",
                     95,
+                    progress_current=len(plan.sections),
+                    progress_total=len(plan.sections),
                 )
                 heartbeat.ensure_alive()
 
                 self._store.mark_succeeded(
                     run.id,
                     self._settings.worker_id,
-                    verification_summary={
-                        "scaffold_only": True,
-                        "template_kind": run.template_kind,
-                        "source_index_run_id": run.source_index_run_id,
-                        "sections_total": 0,
-                        "message": "DOCS-001 scaffold claimed and finalized the run. Section generation starts in DOCS-002.",
-                    },
+                    verification_summary=plan.summary,
                 )
-                logger.info("Completed documentation scaffold run=%s", run.id)
+                logger.info("Completed documentation planning run=%s", run.id)
 
         except Exception as exc:
             error_code = _map_error_code(exc)
@@ -183,6 +191,7 @@ def main() -> None:
             schema=settings.repo_db_schema,
             lease_seconds=settings.worker_lease_seconds,
         ),
+        planning_pipeline=_planning_pipeline(),
         worker_settings=worker_settings,
     )
 
@@ -215,12 +224,45 @@ def _object_storage():
     )
 
 
+def _planning_pipeline():
+    from app.core.config import settings
+    from app.infra.repository_service_client import RepositoryServiceClient
+    from app.infra.retrieval_client import RetrievalClient
+    from app.pipeline.documentation_pipeline import DocumentationPlanningPipeline
+
+    retrieval = None
+    if settings.retrieval_enabled:
+        retrieval = RetrievalClient(
+            base_url=settings.retrieval_service_url,
+            timeout_s=settings.retrieval_request_timeout_s,
+            top_k=settings.retrieval_top_k,
+            include_tests=settings.retrieval_include_tests,
+            score_threshold=settings.retrieval_score_threshold,
+        )
+
+    return DocumentationPlanningPipeline(
+        repository_service=RepositoryServiceClient(
+            base_url=settings.repos_service_url,
+            timeout_s=settings.request_timeout_s,
+        ),
+        storage=_object_storage(),
+        retrieval=retrieval,
+    )
+
+
 def _map_error_code(exc: Exception) -> str:
     if isinstance(exc, LeaseLostError):
         return "worker_lease_lost"
 
     if exc.__class__.__name__ == "ObjectStorageError":
         return "artifact_publish_failed"
+
+    if exc.__class__.__name__ == "RepositoryServiceClientError":
+        if getattr(exc, "status_code", None) == 404:
+            return "repository_not_found"
+        if getattr(exc, "status_code", None) == 409:
+            return "snapshot_conflict"
+        return "transient_infrastructure_failure"
 
     return "unknown_error"
 

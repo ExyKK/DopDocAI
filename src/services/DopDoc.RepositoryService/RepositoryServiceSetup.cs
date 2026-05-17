@@ -6,6 +6,7 @@ using DopDoc.Common.Logging;
 using DopDoc.Common.Observability;
 using DopDoc.Common.UserContext;
 using DopDoc.RepositoryService.Api;
+using DopDoc.RepositoryService.Application.Documentation;
 using DopDoc.RepositoryService.Application.Jobs;
 using DopDoc.RepositoryService.Application.Repositories;
 using DopDoc.RepositoryService.Infrastructure.Data;
@@ -52,6 +53,7 @@ public static class RepositoryServiceSetup
         services.AddScoped<RepositoryApplicationService>();
         services.AddScoped<RepositorySnapshotApplicationService>();
         services.AddScoped<AnalysisArtifactApplicationService>();
+        services.AddScoped<DocumentationSectionApplicationService>();
         services.AddScoped<JobRunApplicationService>();
 
         services.AddOptions<DbOptions>()
@@ -89,6 +91,7 @@ public static class RepositoryServiceSetup
         app.MapGet("/", () => Results.Ok(new { service = "repository_service", status = "ok" })).AllowAnonymous();
         app.MapRepositoryEndpoints();
         app.MapRepositoryInternalEndpoints();
+        app.MapDocumentationInternalEndpoints();
         app.MapRunEndpoints();
 
         app.Logger.LogInformation("Repository service started. Env={Env}", app.Environment.EnvironmentName);

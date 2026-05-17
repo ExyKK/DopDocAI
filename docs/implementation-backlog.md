@@ -867,23 +867,26 @@
 - создать структуру проекта и docker image;
 - реализовать worker entrypoint для `documentation_runs`;
 - подключить Postgres, MinIO, observability.
-- текущий worker работает в scaffold-only режиме: claim-ит run, проходит docs stages и завершает с `VerificationSummaryJson.scaffold_only=true`; sections/artifacts начинаются в `DOCS-002`.
+- scaffold был расширен в `DOCS-002`/`DOCS-003`: worker теперь создает section plan и sources, а генерация текста/артефактов начинается в `DOCS-004`.
 - Acceptance:
 - сервис стартует и может claim-ить jobs.
 
 ### DOCS-002 — Реализовать section planning
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-001`, `INGEST-007`
 - Goal: генератор должен строить документацию не “целиком одним промптом”, а по схеме разделов.
 - Tasks:
 - определить template schema для `developer_handbook`;
 - создать section plan с fixed section keys;
 - записывать sections в `documentation_sections`.
+- реализован fixed `developer_handbook` plan из 10 разделов и internal RepositoryService endpoint для атомарной замены section plan.
 - Acceptance:
 - один `documentation_run` создаёт предсказуемый набор sections.
 
 ### DOCS-003 — Реализовать evidence retrieval per section
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-002`, `RAG-004`
 - Goal: каждый раздел должен опираться на structured artifacts и search.
 - Tasks:
@@ -891,6 +894,7 @@
 - при необходимости делать retrieval по `snapshot_id`;
 - формировать normalized section evidence pack;
 - сохранять section sources.
+- `documentation_worker` загружает analysis artifacts из MinIO, строит normalized evidence per section, добавляет structured artifact/file sources и optional retrieval sources.
 - Acceptance:
 - секции документации имеют machine-readable source set.
 
@@ -1160,7 +1164,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`, `CHAT-002`/`CHAT-003` и `JOBS-003`/`DOCS-001`. `RAG-006` осознанно отложен; для максимально быстрого перехода к генерации документации следующий практичный шаг — `DOCS-002` + `DOCS-003`, затем `DOCS-004`.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`, `CHAT-002`/`CHAT-003`, `JOBS-003`/`DOCS-001` и `DOCS-002`/`DOCS-003`. `RAG-006` осознанно отложен; следующий практичный шаг — `DOCS-004`.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

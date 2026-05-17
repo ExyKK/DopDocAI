@@ -6,10 +6,12 @@ from app.worker.documentation_worker import DocumentationWorker, WorkerSettings 
 from app.worker.job_store import ClaimedDocumentationRun  # noqa: E402
 
 
-def test_worker_scaffold_transitions_claimed_run_to_success() -> None:
+def test_worker_plans_sections_and_transitions_claimed_run_to_success() -> None:
     store = FakeStore()
+    pipeline = FakePlanningPipeline()
     worker = DocumentationWorker(
         store=store,  # type: ignore[arg-type]
+        planning_pipeline=pipeline,  # type: ignore[arg-type]
         worker_settings=WorkerSettings(
             worker_id="worker-a",
             poll_interval_s=0,
@@ -21,12 +23,31 @@ def test_worker_scaffold_transitions_claimed_run_to_success() -> None:
 
     assert store.progress_updates == [
         ("loading_project_model", 20),
-        ("planning_sections", 45),
+        ("planning_sections", 35),
+        ("retrieving_evidence", 65),
         ("finalizing", 95),
     ]
+    assert pipeline.planned_run_id == "run-1"
     assert store.succeeded_summary is not None
-    assert store.succeeded_summary["scaffold_only"] is True
-    assert store.succeeded_summary["sections_total"] == 0
+    assert store.succeeded_summary["scaffold_only"] is False
+    assert store.succeeded_summary["sections_total"] == 1
+
+
+class FakePlanningPipeline:
+    def __init__(self):
+        self.planned_run_id = None
+
+    def build_section_plan(self, run: ClaimedDocumentationRun):
+        self.planned_run_id = run.id
+        return FakePlanResult()
+
+
+class FakePlanResult:
+    sections = [object()]
+    summary = {
+        "scaffold_only": False,
+        "sections_total": 1,
+    }
 
 
 class FakeStore:
