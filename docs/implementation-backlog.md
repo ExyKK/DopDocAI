@@ -19,7 +19,7 @@
 
 Работы лучше выполнять в таком порядке:
 
-1. `ARCH-*`, `DATA-*`, `PLATFORM-*`
+1. `ARCH-*`, `DATA-*`, `PLATFORM-*`, `CONFIG-*`
 2. `REPO-*`
 3. `JOBS-*`
 4. `INGEST-*`, `RAG-*`
@@ -164,6 +164,26 @@
 - покрыть клиенты contract tests.
 - Acceptance:
 - межсервисные HTTP вызовы типизированы и централизованы.
+
+## Epic CONFIG — Runtime Configuration
+
+### CONFIG-001 — Централизовать AI runtime режимы
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `RAG-004A`, `CHAT-003`, `DOCS-001`
+- Artifact: [AI Runtime Configuration](./architecture/ai-runtime-config.md)
+- Goal: production-like режим с real LLM/embedding должен быть дефолтом, а `stub`/`hash` — явной lightweight опцией.
+- Tasks:
+- ввести центральные `DOPDOC_LLM_*` и `DOPDOC_EMBEDDING_*` переменные для compose/local runtime;
+- маппить `DOPDOC_*` в native env vars конкретных сервисов только внутри compose;
+- переключить дефолты на `openrouter` + `deepseek/deepseek-v3.2` и `jina_http` + `jinaai/jina-code-embeddings-0.5b`;
+- сделать CUDA runtime для `embedding_service` дефолтным compose-режимом;
+- обновить compose, service settings и local env templates;
+- задокументировать lightweight режимы `DOPDOC_LLM_PROVIDER=stub` и `DOPDOC_EMBEDDING_PROVIDER=hash`.
+- Acceptance:
+- без явного stub/hash override runtime ожидает real LLM и real embedding service;
+- один `.env` может управлять Chat/Docs/Ingestion AI режимом через `DOPDOC_*`;
+- C# сервисы не содержат ручного чтения `DOPDOC_*` и используют стандартный configuration binding.
 
 ## Epic REPO — RepositoryService
 
@@ -698,7 +718,7 @@
 - Tasks:
 - ввести `EmbeddingProvider` abstraction для indexing и retrieval query embeddings;
 - добавить provider modes: `hash` для lightweight dev и `jina_http` для реальной модели;
-- поднять отдельный optional `embedding_service` container/profile с `jinaai/jina-code-embeddings-0.5b`;
+- поднять отдельный `embedding_service` container с `jinaai/jina-code-embeddings-0.5b`;
 - использовать 896-dimensional vectors, совместимые с текущим `code_chunks_v1`;
 - поддержать batch embedding chunks и query embedding;
 - применять task prefixes для `nl2code`/technical QA: разные prefixes для query и document chunks;
@@ -706,8 +726,8 @@
 - записывать `embedding_provider`, `embedding_model`, `embedding_dimension` и batch counters в `index_runs.StatsJson`;
 - документировать ручной режим: lightweight compose без модели и quality compose с embedding container.
 - Acceptance:
-- обычный dev compose может индексировать без скачивания/загрузки модели через `hash`;
-- optional compose profile запускает real embedding container и индексирует `code_chunks_v1` через `jina-code-embeddings-0.5b`;
+- lightweight smoke compose может индексировать без скачивания/загрузки модели через explicit `hash`;
+- default quality compose запускает real embedding container и индексирует `code_chunks_v1` через `jina-code-embeddings-0.5b`;
 - `torch/transformers` и model weights не попадают в образ `ingestion_worker`;
 - повторная индексация snapshot сохраняет deterministic chunk ids и заменяет vectors без stale points;
 - `RAG-004` retrieval API использует тот же provider abstraction для query vectors.
@@ -718,9 +738,9 @@
 - Depends on: `RAG-004A`
 - Goal: сделать real embedding mode практически пригодным для локального NVIDIA dev-стенда без утяжеления `ingestion_worker`.
 - Tasks:
-- добавить `Dockerfile.cuda` для `embedding_service` на CUDA/PyTorch runtime;
-- добавить compose override `docker-compose.embeddings.cuda.yml` для того же `embedding_service`;
-- оставить CPU `embeddings` profile и lightweight `hash` mode без изменений;
+- добавить `Dockerfile` для `embedding_service` на CUDA/PyTorch runtime;
+- сделать CUDA Dockerfile дефолтным compose runtime для `embedding_service`;
+- оставить lightweight `hash` mode без изменений;
 - отключить шумные uvicorn access logs по умолчанию и увеличить healthcheck interval;
 - снизить CUDA memory footprint для GTX 1650: conservative batch, fp16, max sequence length and allocator hint;
 - добавить graceful CUDA OOM retry with smaller internal batch sizes;

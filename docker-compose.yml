@@ -136,18 +136,23 @@ services:
   # Microservices
   # ---------------------------
   embedding_service:
-    profiles: ["embeddings"]
     build:
       context: .
       dockerfile: src/services/embedding_service/Dockerfile
     container_name: dopdoc_embedding_service
     environment:
-      EMBED_MODEL_NAME: jinaai/jina-code-embeddings-0.5b
-      EMBED_VECTOR_SIZE: "896"
-      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
+      EMBED_MODEL_NAME: ${DOPDOC_EMBEDDING_MODEL:-jinaai/jina-code-embeddings-0.5b}
+      EMBED_VECTOR_SIZE: ${DOPDOC_EMBEDDING_VECTOR_SIZE:-896}
+      EMBED_BATCH_SIZE: ${EMBED_GPU_BATCH_SIZE:-4}
+      EMBED_DEVICE: cuda
+      EMBED_TORCH_DTYPE: ${EMBED_TORCH_DTYPE:-float16}
+      EMBED_MAX_SEQ_LENGTH: ${EMBED_MAX_SEQ_LENGTH:-1024}
       EMBED_TRUST_REMOTE_CODE: "true"
       EMBED_ACCESS_LOG: ${EMBED_ACCESS_LOG:-false}
       EMBED_LOG_LEVEL: ${EMBED_LOG_LEVEL:-info}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
       HF_HOME: /models/huggingface
       TRANSFORMERS_CACHE: /models/huggingface
     ports:
@@ -160,6 +165,13 @@ services:
       timeout: 10s
       retries: 20
       start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   ingestion_service:
     build:
@@ -173,10 +185,10 @@ services:
       INGEST_PORT: 19100
       INGEST_QDRANT_URL: http://qdrant:6333
       INGEST_QDRANT_CODE_CHUNKS_COLLECTION: code_chunks_v1
-      INGEST_EMBEDDING_PROVIDER: ${INGEST_EMBEDDING_PROVIDER:-hash}
-      INGEST_EMBEDDING_MODEL: jinaai/jina-code-embeddings-0.5b
-      INGEST_EMBEDDING_VECTOR_SIZE: "896"
-      INGEST_EMBEDDING_SERVICE_URL: ${INGEST_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
+      INGEST_EMBEDDING_PROVIDER: ${DOPDOC_EMBEDDING_PROVIDER:-jina_http}
+      INGEST_EMBEDDING_MODEL: ${DOPDOC_EMBEDDING_MODEL:-jinaai/jina-code-embeddings-0.5b}
+      INGEST_EMBEDDING_VECTOR_SIZE: ${DOPDOC_EMBEDDING_VECTOR_SIZE:-896}
+      INGEST_EMBEDDING_SERVICE_URL: ${DOPDOC_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
 
       # MinIO (артефакты типа go_symbols.json, опционально)
       DOPDOC_S3_ENDPOINT: http://minio:9000
@@ -216,14 +228,14 @@ services:
       INGEST_QDRANT_URL: http://qdrant:6333
       INGEST_QDRANT_CODE_CHUNKS_COLLECTION: code_chunks_v1
       INGEST_QDRANT_UPSERT_BATCH_SIZE: "64"
-      INGEST_EMBEDDING_PROVIDER: ${INGEST_EMBEDDING_PROVIDER:-hash}
-      INGEST_EMBEDDING_MODEL: jinaai/jina-code-embeddings-0.5b
-      INGEST_EMBEDDING_VECTOR_SIZE: "896"
-      INGEST_EMBEDDING_BATCH_SIZE: "32"
-      INGEST_EMBEDDING_SERVICE_URL: ${INGEST_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
-      INGEST_EMBEDDING_REQUEST_TIMEOUT_S: "120"
-      INGEST_EMBEDDING_MAX_ATTEMPTS: "5"
-      INGEST_EMBEDDING_RETRY_DELAY_S: "2"
+      INGEST_EMBEDDING_PROVIDER: ${DOPDOC_EMBEDDING_PROVIDER:-jina_http}
+      INGEST_EMBEDDING_MODEL: ${DOPDOC_EMBEDDING_MODEL:-jinaai/jina-code-embeddings-0.5b}
+      INGEST_EMBEDDING_VECTOR_SIZE: ${DOPDOC_EMBEDDING_VECTOR_SIZE:-896}
+      INGEST_EMBEDDING_BATCH_SIZE: ${DOPDOC_EMBEDDING_BATCH_SIZE:-32}
+      INGEST_EMBEDDING_SERVICE_URL: ${DOPDOC_EMBEDDING_SERVICE_URL:-http://embedding_service:19400}
+      INGEST_EMBEDDING_REQUEST_TIMEOUT_S: ${DOPDOC_EMBEDDING_REQUEST_TIMEOUT_S:-120}
+      INGEST_EMBEDDING_MAX_ATTEMPTS: ${DOPDOC_EMBEDDING_MAX_ATTEMPTS:-5}
+      INGEST_EMBEDDING_RETRY_DELAY_S: ${DOPDOC_EMBEDDING_RETRY_DELAY_S:-2}
 
       DOPDOC_S3_ENDPOINT: http://minio:9000
       DOPDOC_S3_ACCESS_KEY: dopdoc
@@ -260,6 +272,14 @@ services:
       DOCS_REPOS_SERVICE_URL: http://repository_service:19200
       DOCS_RETRIEVAL_SERVICE_URL: http://ingestion_service:19100
       DOCS_PORT: 19500
+      DOCS_LLM_PROVIDER: ${DOPDOC_LLM_PROVIDER:-openrouter}
+      DOCS_LLM_ENDPOINT: ${DOPDOC_LLM_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      DOCS_LLM_API_KEY: ${DOPDOC_LLM_API_KEY:-}
+      DOCS_LLM_MODEL: ${DOPDOC_LLM_MODEL:-deepseek/deepseek-v3.2}
+      DOCS_LLM_TIMEOUT_SECONDS: ${DOPDOC_LLM_TIMEOUT_SECONDS:-90}
+      DOCS_LLM_TEMPERATURE: ${DOPDOC_LLM_TEMPERATURE:-0.2}
+      DOCS_LLM_MAX_TOKENS: ${DOPDOC_LLM_MAX_TOKENS:-1536}
+      DOCS_LLM_TOP_P: ${DOPDOC_LLM_TOP_P:-0.95}
 
       DOPDOC_S3_ENDPOINT: http://minio:9000
       DOPDOC_S3_ACCESS_KEY: dopdoc
@@ -301,6 +321,14 @@ services:
       DOCS_WORKER_LEASE_SECONDS: "120"
       DOCS_WORKER_HEARTBEAT_SECONDS: "15"
       DOCS_S3_VALIDATE_ON_START: "true"
+      DOCS_LLM_PROVIDER: ${DOPDOC_LLM_PROVIDER:-openrouter}
+      DOCS_LLM_ENDPOINT: ${DOPDOC_LLM_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      DOCS_LLM_API_KEY: ${DOPDOC_LLM_API_KEY:-}
+      DOCS_LLM_MODEL: ${DOPDOC_LLM_MODEL:-deepseek/deepseek-v3.2}
+      DOCS_LLM_TIMEOUT_SECONDS: ${DOPDOC_LLM_TIMEOUT_SECONDS:-90}
+      DOCS_LLM_TEMPERATURE: ${DOPDOC_LLM_TEMPERATURE:-0.2}
+      DOCS_LLM_MAX_TOKENS: ${DOPDOC_LLM_MAX_TOKENS:-1536}
+      DOCS_LLM_TOP_P: ${DOPDOC_LLM_TOP_P:-0.95}
 
       DOPDOC_S3_ENDPOINT: http://minio:9000
       DOPDOC_S3_ACCESS_KEY: dopdoc
@@ -423,17 +451,17 @@ services:
       Retrieval__TimeoutSeconds: 60
       Retrieval__TopK: ${CHAT_RETRIEVAL_TOP_K:-8}
       Retrieval__IncludeTests: ${CHAT_RETRIEVAL_INCLUDE_TESTS:-true}
-      Llm__Provider: ${CHAT_LLM_PROVIDER:-stub}
-      Llm__Endpoint: ${CHAT_LLM_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
-      Llm__ApiKey: ${CHAT_LLM_API_KEY:-}
-      Llm__Model: ${CHAT_LLM_MODEL:-deepseek/deepseek-v3.2}
-      Llm__TimeoutSeconds: ${CHAT_LLM_TIMEOUT_SECONDS:-60}
-      Llm__Temperature: ${CHAT_LLM_TEMPERATURE:-0.2}
-      Llm__MaxTokens: ${CHAT_LLM_MAX_TOKENS:-1536}
-      Llm__TopP: ${CHAT_LLM_TOP_P:-0.95}
-      Llm__RepetitionPenalty: ${CHAT_LLM_REPETITION_PENALTY:-1.05}
-      Llm__HistoryLimit: ${CHAT_LLM_HISTORY_LIMIT:-20}
-      Llm__MaxSourceChars: ${CHAT_LLM_MAX_SOURCE_CHARS:-24000}
+      Llm__Provider: ${DOPDOC_LLM_PROVIDER:-openrouter}
+      Llm__Endpoint: ${DOPDOC_LLM_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      Llm__ApiKey: ${DOPDOC_LLM_API_KEY:-}
+      Llm__Model: ${DOPDOC_LLM_MODEL:-deepseek/deepseek-v3.2}
+      Llm__TimeoutSeconds: ${DOPDOC_LLM_TIMEOUT_SECONDS:-90}
+      Llm__Temperature: ${DOPDOC_LLM_TEMPERATURE:-0.2}
+      Llm__MaxTokens: ${DOPDOC_LLM_MAX_TOKENS:-1536}
+      Llm__TopP: ${DOPDOC_LLM_TOP_P:-0.95}
+      Llm__RepetitionPenalty: ${DOPDOC_LLM_REPETITION_PENALTY:-1.05}
+      Llm__HistoryLimit: ${DOPDOC_LLM_HISTORY_LIMIT:-20}
+      Llm__MaxSourceChars: ${DOPDOC_LLM_MAX_SOURCE_CHARS:-24000}
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: ChatDb

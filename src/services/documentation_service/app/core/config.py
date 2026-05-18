@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import AliasChoices, AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,6 +20,39 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_include_tests: bool = True
     retrieval_score_threshold: float | None = None
+
+    llm_provider: Literal["stub", "openai_compatible", "openrouter"] = Field(
+        default="openrouter",
+        validation_alias=AliasChoices("DOCS_LLM_PROVIDER", "DOPDOC_LLM_PROVIDER"),
+    )
+    llm_endpoint: AnyUrl = Field(
+        default="https://openrouter.ai/api/v1/chat/completions",
+        validation_alias=AliasChoices("DOCS_LLM_ENDPOINT", "DOPDOC_LLM_ENDPOINT"),
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("DOCS_LLM_API_KEY", "DOPDOC_LLM_API_KEY"),
+    )
+    llm_model: str = Field(
+        default="deepseek/deepseek-v3.2",
+        validation_alias=AliasChoices("DOCS_LLM_MODEL", "DOPDOC_LLM_MODEL"),
+    )
+    llm_timeout_seconds: float = Field(
+        default=90.0,
+        validation_alias=AliasChoices("DOCS_LLM_TIMEOUT_SECONDS", "DOPDOC_LLM_TIMEOUT_SECONDS"),
+    )
+    llm_temperature: float = Field(
+        default=0.2,
+        validation_alias=AliasChoices("DOCS_LLM_TEMPERATURE", "DOPDOC_LLM_TEMPERATURE"),
+    )
+    llm_max_tokens: int = Field(
+        default=1536,
+        validation_alias=AliasChoices("DOCS_LLM_MAX_TOKENS", "DOPDOC_LLM_MAX_TOKENS"),
+    )
+    llm_top_p: float = Field(
+        default=0.95,
+        validation_alias=AliasChoices("DOCS_LLM_TOP_P", "DOPDOC_LLM_TOP_P"),
+    )
 
     database_url: str = "postgresql://dopdoc:dopdoc@localhost:5432/dopdoc"
     repo_db_schema: str = "repo"

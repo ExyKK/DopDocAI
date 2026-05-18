@@ -68,26 +68,19 @@ that are not represented by Go symbol chunks use bounded `file_slice` chunks.
 ## Embedding Providers
 
 `ingestion_service` uses an internal `EmbeddingProvider` abstraction for both
-document chunks and future retrieval queries.
+document chunks and retrieval queries. The production-like default is the real
+HTTP embedding model, configured through the central `DOPDOC_EMBEDDING_*`
+runtime variables. Lightweight smoke mode is opt-in.
 
-- `hash`: default lightweight dev/smoke provider; deterministic, no model
-  download, same configured vector size.
-- `jina_http`: quality provider that calls optional `embedding_service`, which
+- `jina_http`: quality provider that calls the separate `embedding_service`, which
   serves `jinaai/jina-code-embeddings-0.5b` in a separate container.
+- `hash`: opt-in lightweight dev/smoke provider; deterministic, no model
+  download, same configured vector size.
 
 The default vector size remains `896`, matching `jina-code-embeddings-0.5b` and
 the existing `code_chunks_v1` collection. Provider metadata is recorded in
 `index_runs.StatsJson`: `embedding_provider`, `embedding_model`,
 `embedding_dimension`, `embedding_batches_total` and `embedding_inputs_total`.
-
-The model container has two runtime shapes:
-
-- `embeddings`: CPU profile for correctness checks when GPU is unavailable.
-- `embeddings` plus `docker-compose.embeddings.cuda.yml`: the same
-  `embedding_service` switched to `Dockerfile.cuda`, `EMBED_DEVICE=cuda` and a
-  Docker Compose NVIDIA GPU reservation. The worker still talks to the same
-  `jina_http` provider URL, so retrieval/indexing code does not depend on
-  whether the model runs on CPU or GPU.
 
 ## Payload Indexes
 
