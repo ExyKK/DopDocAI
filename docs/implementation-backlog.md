@@ -900,12 +900,14 @@
 
 ### DOCS-004 — Реализовать `developer_handbook`
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-003`
 - Goal: получить первый реально полезный тип документации.
 - Tasks:
 - сгенерировать sections `overview`, `repository_layout`, `package_map`, `entry_points`, `major_flows`, `domain_entities`, `integrations`, `configuration`, `build_run_test`, `known_gaps`;
 - собрать `documentation.md` и `manifest.json`;
 - сохранить section artifacts и bundle.
+- реализован deterministic evidence-based generator: worker публикует section markdown, общий `documentation.md`, `manifest.schema-v1.json` в MinIO и регистрирует metadata в `repo.documentation_artifacts`.
 - Acceptance:
 - можно сгенерировать developer handbook для проиндексированного snapshot.
 
@@ -968,6 +970,65 @@
 - каждый section prompt имеет предсказуемый размер и source provenance;
 - большие artifacts не попадают в LLM context целиком;
 - verification может объяснить, какие источники были использованы или отброшены.
+
+### DOCS-010 — Добавить LLM provider layer в `documentation_service`
+- Priority: `P0`
+- Depends on: `DOCS-009`, `CHAT-003`
+- Goal: `documentation_service` должен вызывать внешнюю LLM через конфигурируемый provider, не завязываясь на конкретный OpenRouter model id.
+- Tasks:
+- вынести LLM-клиент в отдельный infrastructure слой по аналогии с `ChatService`;
+- поддержать `stub` dev mode и OpenAI/OpenRouter-compatible chat completions;
+- добавить настройки `DOCS_LLM_PROVIDER`, `DOCS_LLM_ENDPOINT`, `DOCS_LLM_API_KEY`, `DOCS_LLM_MODEL`, `DOCS_LLM_TEMPERATURE`, `DOCS_LLM_MAX_TOKENS`, `DOCS_LLM_TIMEOUT_SECONDS`;
+- передавать OpenRouter app attribution headers и предусмотреть provider routing/max price knobs;
+- обрабатывать timeout/rate-limit/provider errors как retryable documentation run failures.
+- Acceptance:
+- documentation worker может сгенерировать одну секцию через real LLM provider или stub без изменения pipeline-кода;
+- provider/model/latency/token usage сохраняются в run summary.
+
+### DOCS-011 — Спроектировать prompt contract для section generation
+- Priority: `P0`
+- Depends on: `DOCS-009`, `DOCS-010`
+- Goal: LLM должна получать компактный, проверяемый section prompt и возвращать markdown без неподтвержденных утверждений.
+- Tasks:
+- определить system/developer/user prompt template для `developer_handbook`;
+- передавать section plan, bounded evidence pack, source ids и explicit citation rules;
+- запретить выдумывать файлы, команды, API и зависимости вне evidence;
+- поддержать русский/английский output language через config или run option;
+- добавить golden prompt fixtures для 2-3 типовых секций.
+- Acceptance:
+- prompt для каждой секции помещается в заданный token budget;
+- LLM output ссылается только на предоставленные source ids;
+- отсутствие evidence приводит к честному partial/unknown тексту, а не hallucination.
+
+### DOCS-012 — Заменить deterministic `developer_handbook` generator на LLM-backed generation
+- Priority: `P0`
+- Depends on: `DOCS-010`, `DOCS-011`
+- Goal: убрать deterministic prose generator из production path и генерировать полезные markdown sections через LLM.
+- Tasks:
+- заменить `DeveloperHandbookGenerator.generate_sections` на LLM-backed section generation;
+- оставить deterministic/stub генератор только для smoke/dev режима;
+- генерировать секции последовательно с progress updates и сохранением per-section errors;
+- собрать общий `documentation.md` из LLM sections без повторной генерации всего документа одним промптом;
+- сохранять model/provider/usage/finish_reason per section в manifest или run summary.
+- Acceptance:
+- manual `index -> documentation` run создаёт LLM-generated `developer_handbook`;
+- deterministic markdown больше не используется при `DOCS_LLM_PROVIDER != stub`;
+- failed section не теряет уже опубликованные diagnostics и переводит run в корректный failed/retryable статус.
+
+### DOCS-013 — Добавить LLM cost controls и экспериментальную оценку качества
+- Priority: `P1`
+- Depends on: `DOCS-012`
+- Goal: дипломные эксперименты должны быть воспроизводимыми и не сжигать бюджет незаметно.
+- Tasks:
+- считать estimated/actual input/output tokens и примерную стоимость run;
+- добавить per-run caps: max sections, max input tokens, max output tokens, max estimated USD;
+- логировать provider/model/pricing snapshot, чтобы результаты экспериментов можно было объяснить;
+- подготовить небольшой evaluation checklist для generated docs: coverage, groundedness, source quality, readability;
+- сохранить результаты ручных прогонов для `cobra` и `image-board` как baseline notes.
+- Acceptance:
+- перед запуском можно ограничить стоимость одного documentation run;
+- после запуска видно, сколько стоила каждая секция и весь документ;
+- есть минимальная таблица сравнения моделей/настроек для диплома.
 
 ## Epic GATEWAY — Public API Integration
 
@@ -1164,7 +1225,7 @@
 
 ## Suggested First Implementation Slice
 
-Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`, `CHAT-002`/`CHAT-003`, `JOBS-003`/`DOCS-001` и `DOCS-002`/`DOCS-003`. `RAG-006` осознанно отложен; следующий практичный шаг — `DOCS-004`.
+Актуализация: базовый slice уже расширен выполненными `INGEST-008`-`INGEST-022`, затем закрыты `RAG-001`-`RAG-005`, `CHAT-002`/`CHAT-003`, `JOBS-003`/`DOCS-001` и `DOCS-002`-`DOCS-004`. `RAG-006` осознанно отложен; следующий практичный шаг — ручной прогон `index -> documentation`, затем либо `DOCS-005`/`DOCS-006`, либо gateway/front wiring для demo flow.
 
 Если нужно начать немедленно и без дополнительной декомпозиции, первый рабочий срез такой:
 

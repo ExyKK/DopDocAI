@@ -54,6 +54,7 @@ public static class RepositoryServiceSetup
         services.AddScoped<RepositorySnapshotApplicationService>();
         services.AddScoped<AnalysisArtifactApplicationService>();
         services.AddScoped<DocumentationSectionApplicationService>();
+        services.AddScoped<DocumentationArtifactApplicationService>();
         services.AddScoped<JobRunApplicationService>();
 
         services.AddOptions<DbOptions>()

@@ -69,6 +69,21 @@ class RepositoryServiceClient:
                 status_code=response.status_code,
             )
 
+    def register_documentation_artifact(
+        self,
+        documentation_run_id: str,
+        artifact: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self._base_url}/internal/v1/documentation-runs/{documentation_run_id}/artifacts"
+        response = httpx.post(url, json=artifact, timeout=self._timeout_s)
+        if not response.is_success:
+            raise RepositoryServiceClientError(
+                f"RepositoryService documentation artifact registration failed: status={response.status_code} body={_truncate(response.text, 512)}",
+                status_code=response.status_code,
+            )
+
+        return response.json()
+
 
 def _truncate(value: str, max_length: int) -> str:
     if not value:

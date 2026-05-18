@@ -52,3 +52,30 @@ public sealed record DocumentationSectionSourceResponse(
     [property: JsonPropertyName("score")] double? Score,
     [property: JsonPropertyName("note")] string? Note
 );
+
+public sealed record RegisterDocumentationArtifactRequest(
+    [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
+    [property: JsonPropertyName("section_key")] string? SectionKey,
+    [property: JsonPropertyName("storage_bucket")] string StorageBucket,
+    [property: JsonPropertyName("storage_key")] string StorageKey,
+    [property: JsonPropertyName("content_type")] string ContentType,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("checksum_sha256")] string ChecksumSha256,
+    [property: JsonPropertyName("size_bytes")] long SizeBytes,
+    [property: JsonPropertyName("schema_version")] int SchemaVersion
+);
+
+public sealed record DocumentationArtifactResponse(
+    [property: JsonPropertyName("id")] Guid Id,
+    [property: JsonPropertyName("documentation_run_id")] Guid DocumentationRunId,
+    [property: JsonPropertyName("section_id")] Guid? SectionId,
+    [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
+    [property: JsonPropertyName("storage_bucket")] string StorageBucket,
+    [property: JsonPropertyName("storage_key")] string StorageKey,
+    [property: JsonPropertyName("content_type")] string ContentType,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("checksum_sha256")] string ChecksumSha256,
+    [property: JsonPropertyName("size_bytes")] long SizeBytes,
+    [property: JsonPropertyName("schema_version")] int SchemaVersion,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt
+);

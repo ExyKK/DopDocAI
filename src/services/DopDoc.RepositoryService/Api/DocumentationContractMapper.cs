@@ -27,6 +27,20 @@ internal static class DocumentationContractMapper
                     Note: source.Note)).ToList())).ToList());
     }
 
+    public static RegisterDocumentationArtifactCommand ToCommand(RegisterDocumentationArtifactRequest request)
+    {
+        return new RegisterDocumentationArtifactCommand(
+            ArtifactKind: request.ArtifactKind,
+            SectionKey: request.SectionKey,
+            StorageBucket: request.StorageBucket,
+            StorageKey: request.StorageKey,
+            ContentType: request.ContentType,
+            Format: request.Format,
+            ChecksumSha256: request.ChecksumSha256,
+            SizeBytes: request.SizeBytes,
+            SchemaVersion: request.SchemaVersion);
+    }
+
     public static DocumentationSectionResponse ToResponse(DocumentationSection section)
     {
         return new DocumentationSectionResponse(
@@ -58,5 +72,22 @@ internal static class DocumentationContractMapper
             ChunkId: source.ChunkId,
             Score: source.Score,
             Note: source.Note);
+    }
+
+    public static DocumentationArtifactResponse ToResponse(DocumentationArtifact artifact)
+    {
+        return new DocumentationArtifactResponse(
+            Id: artifact.Id,
+            DocumentationRunId: artifact.DocumentationRunId,
+            SectionId: artifact.SectionId,
+            ArtifactKind: artifact.ArtifactKind,
+            StorageBucket: artifact.StorageBucket,
+            StorageKey: artifact.StorageKey,
+            ContentType: artifact.ContentType,
+            Format: artifact.Format,
+            ChecksumSha256: artifact.ChecksumSha256,
+            SizeBytes: artifact.SizeBytes,
+            SchemaVersion: artifact.SchemaVersion,
+            CreatedAt: artifact.CreatedAt);
     }
 }

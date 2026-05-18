@@ -101,29 +101,27 @@ class DocumentationWorker:
                 self._settings.worker_id,
                 self._settings.heartbeat_seconds,
             ) as heartbeat:
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "loading_project_model",
-                    20,
-                )
-                heartbeat.ensure_alive()
+                def report_progress(
+                    stage: str,
+                    progress_pct: int,
+                    *,
+                    progress_current: int = 0,
+                    progress_total: int = 0,
+                ) -> None:
+                    self._store.update_progress(
+                        run.id,
+                        self._settings.worker_id,
+                        stage,
+                        progress_pct,
+                        progress_current=progress_current,
+                        progress_total=progress_total,
+                    )
+                    heartbeat.ensure_alive()
 
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "planning_sections",
-                    35,
+                plan = self._planning_pipeline.build_developer_handbook(
+                    run,
+                    report_progress=report_progress,
                 )
-                heartbeat.ensure_alive()
-
-                self._store.update_progress(
-                    run.id,
-                    self._settings.worker_id,
-                    "retrieving_evidence",
-                    65,
-                )
-                plan = self._planning_pipeline.build_section_plan(run)
                 heartbeat.ensure_alive()
 
                 self._store.update_progress(
@@ -141,7 +139,7 @@ class DocumentationWorker:
                     self._settings.worker_id,
                     verification_summary=plan.summary,
                 )
-                logger.info("Completed documentation planning run=%s", run.id)
+                logger.info("Completed developer handbook run=%s", run.id)
 
         except Exception as exc:
             error_code = _map_error_code(exc)
@@ -221,6 +219,8 @@ def _object_storage():
         secret_key=settings.s3_secret_key,
         bucket=settings.s3_bucket,
         region=settings.s3_region,
+        max_attempts=settings.s3_upload_max_attempts,
+        retry_delay_s=settings.s3_upload_retry_delay_s,
     )
 
 
@@ -228,7 +228,7 @@ def _planning_pipeline():
     from app.core.config import settings
     from app.infra.repository_service_client import RepositoryServiceClient
     from app.infra.retrieval_client import RetrievalClient
-    from app.pipeline.documentation_pipeline import DocumentationPlanningPipeline
+    from app.pipeline.documentation_pipeline import DocumentationGenerationPipeline
 
     retrieval = None
     if settings.retrieval_enabled:
@@ -240,7 +240,7 @@ def _planning_pipeline():
             score_threshold=settings.retrieval_score_threshold,
         )
 
-    return DocumentationPlanningPipeline(
+    return DocumentationGenerationPipeline(
         repository_service=RepositoryServiceClient(
             base_url=settings.repos_service_url,
             timeout_s=settings.request_timeout_s,

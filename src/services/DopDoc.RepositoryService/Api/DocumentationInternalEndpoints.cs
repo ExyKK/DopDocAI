@@ -25,6 +25,21 @@ public static class DocumentationInternalEndpoints
         })
         .WithName("InternalReplaceDocumentationSectionPlan");
 
+        g.MapPost("/{documentation_run_id:guid}/artifacts", async (
+            [FromRoute(Name = "documentation_run_id")] Guid documentationRunId,
+            RegisterDocumentationArtifactRequest request,
+            DocumentationArtifactApplicationService artifacts,
+            CancellationToken ct) =>
+        {
+            var result = await artifacts.RegisterAsync(
+                documentationRunId,
+                DocumentationContractMapper.ToCommand(request),
+                ct);
+
+            return TypedResults.Ok(DocumentationContractMapper.ToResponse(result));
+        })
+        .WithName("InternalRegisterDocumentationArtifact");
+
         return g;
     }
 }

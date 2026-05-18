@@ -42,6 +42,14 @@ class Settings(BaseSettings):
         default="us-east-1",
         validation_alias=AliasChoices("DOCS_S3_REGION", "DOPDOC_S3_REGION"),
     )
+    s3_upload_max_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices("DOCS_S3_UPLOAD_MAX_ATTEMPTS", "DOPDOC_S3_UPLOAD_MAX_ATTEMPTS"),
+    )
+    s3_upload_retry_delay_s: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices("DOCS_S3_UPLOAD_RETRY_DELAY_S", "DOPDOC_S3_UPLOAD_RETRY_DELAY_S"),
+    )
     s3_validate_on_start: bool = False
 
     worker_id: str | None = None

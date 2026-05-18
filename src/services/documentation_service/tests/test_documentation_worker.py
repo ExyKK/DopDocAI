@@ -25,6 +25,8 @@ def test_worker_plans_sections_and_transitions_claimed_run_to_success() -> None:
         ("loading_project_model", 20),
         ("planning_sections", 35),
         ("retrieving_evidence", 65),
+        ("generating_sections", 78),
+        ("publishing_artifacts", 92),
         ("finalizing", 95),
     ]
     assert pipeline.planned_run_id == "run-1"
@@ -37,8 +39,13 @@ class FakePlanningPipeline:
     def __init__(self):
         self.planned_run_id = None
 
-    def build_section_plan(self, run: ClaimedDocumentationRun):
+    def build_developer_handbook(self, run: ClaimedDocumentationRun, *, report_progress):
         self.planned_run_id = run.id
+        report_progress("loading_project_model", 20)
+        report_progress("planning_sections", 35)
+        report_progress("retrieving_evidence", 65)
+        report_progress("generating_sections", 78)
+        report_progress("publishing_artifacts", 92)
         return FakePlanResult()
 
 
