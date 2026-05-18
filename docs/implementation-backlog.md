@@ -176,7 +176,7 @@
 - Tasks:
 - ввести центральные `DOPDOC_LLM_*` и `DOPDOC_EMBEDDING_*` переменные для compose/local runtime;
 - маппить `DOPDOC_*` в native env vars конкретных сервисов только внутри compose;
-- переключить дефолты на `openrouter` + `deepseek/deepseek-v3.2` и `jina_http` + `jinaai/jina-code-embeddings-0.5b`;
+- переключить дефолты на `openrouter` + `deepseek/deepseek-v4-flash` и `jina_http` + `jinaai/jina-code-embeddings-0.5b`;
 - сделать CUDA runtime для `embedding_service` дефолтным compose-режимом;
 - обновить compose, service settings и local env templates;
 - задокументировать lightweight режимы `DOPDOC_LLM_PROVIDER=stub` и `DOPDOC_EMBEDDING_PROVIDER=hash`.
@@ -978,7 +978,9 @@
 
 ### DOCS-009 — Ввести token-budgeted evidence packs
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-003`, `INGEST-015`, `INGEST-016`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
 - Goal: генератор документации не должен отправлять в LLM целые raw artifacts без бюджета и отбора.
 - Tasks:
 - определить per-section evidence budget для `developer_handbook`, `api_reference`, `configuration_and_ops`, `changes_since_previous_snapshot`;
@@ -990,6 +992,9 @@
 - каждый section prompt имеет предсказуемый размер и source provenance;
 - большие artifacts не попадают в LLM context целиком;
 - verification может объяснить, какие источники были использованы или отброшены.
+- Notes:
+- реализовано в `documentation_service` как per-section `EvidencePack` с дефолтами `120000` total tokens, `16000` tokens per source и `80` sources, рассчитанными под выбранный DeepSeek V4 Flash 1M-context режим;
+- worker публикует `evidence_packs.schema-v1.json`, а run summary включает counts и token estimates.
 
 ### DOCS-010 — Добавить LLM provider layer в `documentation_service`
 - Priority: `P0`
@@ -1007,7 +1012,9 @@
 
 ### DOCS-011 — Спроектировать prompt contract для section generation
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-009`, `DOCS-010`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
 - Goal: LLM должна получать компактный, проверяемый section prompt и возвращать markdown без неподтвержденных утверждений.
 - Tasks:
 - определить system/developer/user prompt template для `developer_handbook`;
@@ -1019,6 +1026,9 @@
 - prompt для каждой секции помещается в заданный token budget;
 - LLM output ссылается только на предоставленные source ids;
 - отсутствие evidence приводит к честному partial/unknown тексту, а не hallucination.
+- Notes:
+- реализован schema-versioned prompt contract manifest с `system`/`developer`/`user` messages, strict citation rules и output language `ru` по умолчанию;
+- добавлены golden fixture и unit coverage; фактический LLM вызов остаётся в `DOCS-010`/`DOCS-012`.
 
 ### DOCS-012 — Заменить deterministic `developer_handbook` generator на LLM-backed generation
 - Priority: `P0`

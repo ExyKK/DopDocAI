@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.infra.retrieval_client import RetrievedSource, RetrievalClient, RetrievalClientError
+from app.infra.retrieval_client import RetrievalClient, RetrievalClientError, RetrievedSource
+from app.pipeline.evidence_pack import EvidencePack, EvidencePackBudget, build_evidence_pack
 from app.pipeline.templates import SectionTemplate
 
 
@@ -13,6 +14,8 @@ class SectionEvidence:
     status: str
     sources: list[dict[str, Any]]
     evidence: dict[str, Any] = field(default_factory=dict)
+    evidence_pack: EvidencePack | None = None
+    prompt_contract: dict[str, Any] | None = None
 
     def to_request(self) -> dict[str, Any]:
         return {
@@ -25,8 +28,9 @@ class SectionEvidence:
 
 
 class EvidencePlanner:
-    def __init__(self, retrieval: RetrievalClient | None):
+    def __init__(self, retrieval: RetrievalClient | None, *, budget: EvidencePackBudget | None = None):
         self._retrieval = retrieval
+        self._budget = budget or EvidencePackBudget()
 
     def plan(
         self,
@@ -41,7 +45,16 @@ class EvidencePlanner:
             _add_structured_evidence(builder, artifacts)
             if self._retrieval is not None and _should_use_retrieval(template.key, builder.sources):
                 _add_retrieval_evidence(builder, self._retrieval)
-            sections.append(builder.build())
+            section = builder.build()
+            section.evidence_pack = build_evidence_pack(
+                section_key=section.section_key,
+                title=section.title,
+                ordinal=section.ordinal,
+                evidence=section.evidence,
+                sources=section.sources,
+                budget=self._budget,
+            )
+            sections.append(section)
 
         return sections
 
@@ -238,10 +251,14 @@ def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient
     builder.evidence["retrieval_query"] = builder.template.retrieval_query
     builder.evidence["retrieval_matches"] = [
         {
+            "chunk_id": match.chunk_id,
             "file_path": match.file_path,
             "symbol_name": match.symbol_name,
+            "start_line": match.start_line,
+            "end_line": match.end_line,
             "score": match.score,
             "source_kind": match.source_kind,
+            "text": match.text,
         }
         for match in matches[:8]
     ]

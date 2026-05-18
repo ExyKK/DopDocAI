@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "template_kind": "developer_handbook",
+  "section_key": "entry_points",
+  "title": "Entry Points",
+  "output_language": "ru",
+  "expected_message_roles": ["system", "developer", "user"],
+  "required_rules": [
+    "Use only source ids listed in the evidence pack.",
+    "If evidence is weak or missing, say so explicitly and keep the section partial.",
+    "Every factual claim about repository behavior, files, commands, APIs, dependencies, or configuration must cite one or more source ids"
+  ]
+}

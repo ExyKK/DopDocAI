@@ -12,6 +12,7 @@ class RetrievalClientError(RuntimeError):
 class RetrievedSource:
     chunk_id: str
     score: float
+    text: str
     file_path: str | None
     language: str | None
     source_scope: str | None
@@ -72,6 +73,7 @@ def _to_source(match: dict[str, Any]) -> RetrievedSource:
     return RetrievedSource(
         chunk_id=match.get("chunk_id") or "",
         score=float(match.get("score") or 0.0),
+        text=match.get("text") or "",
         file_path=source.get("file_path"),
         language=source.get("language"),
         source_scope=source.get("source_scope"),

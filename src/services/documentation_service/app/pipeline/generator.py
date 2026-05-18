@@ -46,6 +46,8 @@ class DeveloperHandbookGenerator:
         sections: list[GeneratedSection],
         section_artifacts: list[dict[str, Any]],
         documentation_artifact: dict[str, Any],
+        evidence_pack_artifact: dict[str, Any] | None = None,
+        prompt_contract_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -65,6 +67,8 @@ class DeveloperHandbookGenerator:
                 for index, section in enumerate(sections)
             ],
             "documentation": documentation_artifact,
+            "evidence_pack_manifest": evidence_pack_artifact,
+            "prompt_contract_manifest": prompt_contract_artifact,
         }
 
 
@@ -140,7 +144,7 @@ def _summarize_value(key: str, value: Any) -> list[str]:
             return []
         simple_items = []
         for item_key, item_value in list(value.items())[:6]:
-            if isinstance(item_value, (str, int, float, bool)) or item_value is None:
+            if isinstance(item_value, str | int | float | bool) or item_value is None:
                 simple_items.append(f"{item_key}={item_value}")
         if simple_items:
             return [f"{label}: {', '.join(simple_items)}"]

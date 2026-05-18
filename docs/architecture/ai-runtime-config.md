@@ -4,6 +4,10 @@
 real embedding providers are enabled unless a lightweight mode is explicitly
 selected.
 
+The current primary LLM is `deepseek/deepseek-v4-flash` through OpenRouter. It
+has a 1,048,576-token context window, so documentation evidence budgets are
+spacious by default while still bounded and debuggable.
+
 ## Primary Variables
 
 Use central `DOPDOC_*` variables in the root `.env`:
@@ -12,7 +16,12 @@ Use central `DOPDOC_*` variables in the root `.env`:
 DOPDOC_LLM_PROVIDER=openrouter
 DOPDOC_LLM_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 DOPDOC_LLM_API_KEY=
-DOPDOC_LLM_MODEL=deepseek/deepseek-v3.2
+DOPDOC_LLM_MODEL=deepseek/deepseek-v4-flash
+
+DOPDOC_DOCS_OUTPUT_LANGUAGE=ru
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS=120000
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS=16000
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES=80
 
 DOPDOC_EMBEDDING_PROVIDER=jina_http
 DOPDOC_EMBEDDING_MODEL=jinaai/jina-code-embeddings-0.5b

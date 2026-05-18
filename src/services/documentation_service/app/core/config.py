@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DOCS_LLM_API_KEY", "DOPDOC_LLM_API_KEY"),
     )
     llm_model: str = Field(
-        default="deepseek/deepseek-v3.2",
+        default="deepseek/deepseek-v4-flash",
         validation_alias=AliasChoices("DOCS_LLM_MODEL", "DOPDOC_LLM_MODEL"),
     )
     llm_timeout_seconds: float = Field(
@@ -52,6 +52,31 @@ class Settings(BaseSettings):
     llm_top_p: float = Field(
         default=0.95,
         validation_alias=AliasChoices("DOCS_LLM_TOP_P", "DOPDOC_LLM_TOP_P"),
+    )
+    prompt_output_language: str = Field(
+        default="ru",
+        validation_alias=AliasChoices("DOCS_PROMPT_OUTPUT_LANGUAGE", "DOPDOC_DOCS_OUTPUT_LANGUAGE"),
+    )
+    evidence_pack_max_tokens: int = Field(
+        default=120_000,
+        validation_alias=AliasChoices(
+            "DOCS_EVIDENCE_PACK_MAX_TOKENS",
+            "DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS",
+        ),
+    )
+    evidence_pack_max_source_tokens: int = Field(
+        default=16_000,
+        validation_alias=AliasChoices(
+            "DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS",
+            "DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS",
+        ),
+    )
+    evidence_pack_max_sources: int = Field(
+        default=80,
+        validation_alias=AliasChoices(
+            "DOCS_EVIDENCE_PACK_MAX_SOURCES",
+            "DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES",
+        ),
     )
 
     database_url: str = "postgresql://dopdoc:dopdoc@localhost:5432/dopdoc"

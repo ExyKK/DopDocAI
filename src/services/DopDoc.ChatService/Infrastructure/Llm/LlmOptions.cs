@@ -5,7 +5,7 @@ public sealed class LlmOptions
     public string Provider { get; set; } = "openrouter";
     public string Endpoint { get; set; } = "https://openrouter.ai/api/v1/chat/completions";
     public string ApiKey { get; set; } = "";
-    public string Model { get; set; } = "deepseek/deepseek-v3.2";
+    public string Model { get; set; } = "deepseek/deepseek-v4-flash";
     public double TimeoutSeconds { get; set; } = 90;
     public double Temperature { get; set; } = 0.2;
     public int MaxTokens { get; set; } = 1536;

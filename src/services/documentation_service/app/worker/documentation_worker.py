@@ -229,6 +229,7 @@ def _planning_pipeline():
     from app.infra.repository_service_client import RepositoryServiceClient
     from app.infra.retrieval_client import RetrievalClient
     from app.pipeline.documentation_pipeline import DocumentationGenerationPipeline
+    from app.pipeline.evidence_pack import EvidencePackBudget
 
     retrieval = None
     if settings.retrieval_enabled:
@@ -247,6 +248,12 @@ def _planning_pipeline():
         ),
         storage=_object_storage(),
         retrieval=retrieval,
+        evidence_pack_budget=EvidencePackBudget(
+            max_tokens=settings.evidence_pack_max_tokens,
+            max_source_tokens=settings.evidence_pack_max_source_tokens,
+            max_sources=settings.evidence_pack_max_sources,
+        ),
+        prompt_output_language=settings.prompt_output_language,
     )
 
 
