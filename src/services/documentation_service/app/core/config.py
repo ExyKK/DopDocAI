@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AliasChoices, AnyUrl, Field
+from pydantic import AliasChoices, AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,12 +46,55 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DOCS_LLM_TEMPERATURE", "DOPDOC_LLM_TEMPERATURE"),
     )
     llm_max_tokens: int = Field(
-        default=1536,
-        validation_alias=AliasChoices("DOCS_LLM_MAX_TOKENS", "DOPDOC_LLM_MAX_TOKENS"),
+        default=4096,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_MAX_TOKENS",
+            "DOPDOC_DOCS_LLM_MAX_TOKENS",
+            "DOPDOC_LLM_MAX_TOKENS",
+        ),
     )
     llm_top_p: float = Field(
         default=0.95,
         validation_alias=AliasChoices("DOCS_LLM_TOP_P", "DOPDOC_LLM_TOP_P"),
+    )
+    llm_repetition_penalty: float | None = Field(
+        default=1.05,
+        validation_alias=AliasChoices("DOCS_LLM_REPETITION_PENALTY", "DOPDOC_LLM_REPETITION_PENALTY"),
+    )
+    llm_openrouter_site_url: str = Field(
+        default="http://localhost",
+        validation_alias=AliasChoices(
+            "DOCS_LLM_OPENROUTER_SITE_URL",
+            "DOPDOC_LLM_OPENROUTER_SITE_URL",
+        ),
+    )
+    llm_openrouter_app_title: str = Field(
+        default="DopDocAI",
+        validation_alias=AliasChoices(
+            "DOCS_LLM_OPENROUTER_APP_TITLE",
+            "DOPDOC_LLM_OPENROUTER_APP_TITLE",
+        ),
+    )
+    llm_provider_options_json: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_PROVIDER_OPTIONS_JSON",
+            "DOPDOC_LLM_PROVIDER_OPTIONS_JSON",
+        ),
+    )
+    llm_provider_max_price_prompt: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_PROVIDER_MAX_PRICE_PROMPT",
+            "DOPDOC_LLM_PROVIDER_MAX_PRICE_PROMPT",
+        ),
+    )
+    llm_provider_max_price_completion: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_PROVIDER_MAX_PRICE_COMPLETION",
+            "DOPDOC_LLM_PROVIDER_MAX_PRICE_COMPLETION",
+        ),
     )
     prompt_output_language: str = Field(
         default="ru",
@@ -116,6 +159,17 @@ class Settings(BaseSettings):
     worker_poll_interval_s: float = 5.0
     worker_lease_seconds: int = 120
     worker_heartbeat_seconds: int = 15
+
+    @field_validator(
+        "llm_provider_max_price_prompt",
+        "llm_provider_max_price_completion",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional_float(cls, value):
+        if value == "":
+            return None
+        return value
 
 
 settings = Settings()

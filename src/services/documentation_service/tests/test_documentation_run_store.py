@@ -115,6 +115,36 @@ def test_claim_next_marks_expired_run_stale_when_attempts_are_exhausted(
     assert row == ("stale", "stale", "stale_lease_expired")
 
 
+def test_mark_failed_requeues_retryable_run_when_attempts_remain(
+    database_url: str,
+    repo_schema: str,
+) -> None:
+    run_id = _insert_queued_run(database_url, repo_schema, max_attempts=2)
+    store = DocumentationRunStore(database_url, repo_schema, lease_seconds=120)
+    claimed = store.claim_next("worker-a")
+    assert claimed is not None
+
+    assert store.mark_failed(
+        str(run_id),
+        "worker-a",
+        "llm_provider_rate_limited",
+        "rate limited",
+        retryable=True,
+    ) is True
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            f'''
+            SELECT "Status", "Stage", "Attempt", "ErrorCode", "WorkerId"
+            FROM "{repo_schema}".documentation_runs
+            WHERE "Id" = %s
+            ''',
+            (run_id,),
+        ).fetchone()
+
+    assert row == ("queued", "queued", 1, "llm_provider_rate_limited", None)
+
+
 def _insert_queued_run(
     database_url: str,
     schema: str,

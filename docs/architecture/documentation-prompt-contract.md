@@ -55,5 +55,6 @@ The documentation worker writes the prompt contract manifest:
 repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/prompt_contracts.schema-v1.json
 ```
 
-`DOCS-010`/`DOCS-012` will use this contract as the input to the LLM provider
-layer and replace deterministic section prose in the production path.
+`DOCS-010`/`DOCS-012` use this contract as the input to the LLM provider layer.
+Production-like runs call the configured external provider, while `stub` mode
+keeps deterministic smoke generation available without network calls.

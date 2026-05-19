@@ -25,6 +25,7 @@ class SectionPromptContract:
     schema_version: int
     section_key: str
     title: str
+    ordinal: int
     output_language: str
     messages: list[PromptMessage]
     source_ids: list[str]
@@ -35,6 +36,7 @@ class SectionPromptContract:
             "schema_version": self.schema_version,
             "section_key": self.section_key,
             "title": self.title,
+            "ordinal": self.ordinal,
             "output_language": self.output_language,
             "source_ids": self.source_ids,
             "estimated_input_tokens": self.estimated_input_tokens,
@@ -73,6 +75,7 @@ def build_section_prompt_contract(
         schema_version=PROMPT_CONTRACT_VERSION,
         section_key=section.section_key,
         title=section.title,
+        ordinal=section.ordinal,
         output_language=output_language,
         messages=messages,
         source_ids=[source.source_id for source in evidence_pack.sources],

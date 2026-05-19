@@ -1,8 +1,10 @@
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.infra.llm_client import LlmCompletionProvider
 from app.infra.object_storage import ObjectStorageClient
 from app.infra.repository_service_client import AnalysisArtifactRef, RepositoryServiceClient
 from app.infra.retrieval_client import RetrievalClient
@@ -12,7 +14,8 @@ from app.pipeline.evidence_pack import (
     EvidencePackBudget,
     build_evidence_pack_manifest,
 )
-from app.pipeline.generator import DeveloperHandbookGenerator
+from app.pipeline.generator import DeveloperHandbookGenerator, GeneratedSection
+from app.pipeline.llm_generation import LlmSectionGenerator
 from app.pipeline.prompt_contract import (
     SectionPromptContract,
     build_prompt_contract_manifest,
@@ -28,6 +31,8 @@ REQUIRED_ANALYSIS_ARTIFACTS = (
     "commit_log",
 )
 
+logger = logging.getLogger("documentation_pipeline")
+
 
 @dataclass(frozen=True)
 class DocumentationPlanResult:
@@ -42,6 +47,7 @@ class DocumentationGenerationPipeline:
         repository_service: RepositoryServiceClient,
         storage: ObjectStorageClient,
         retrieval: RetrievalClient | None,
+        llm_provider: LlmCompletionProvider,
         evidence_pack_budget: EvidencePackBudget | None = None,
         prompt_output_language: str = "ru",
     ):
@@ -49,6 +55,7 @@ class DocumentationGenerationPipeline:
         self._storage = storage
         self._planner = EvidencePlanner(retrieval, budget=evidence_pack_budget)
         self._generator = DeveloperHandbookGenerator()
+        self._section_generator = LlmSectionGenerator(llm_provider)
         self._prompt_output_language = prompt_output_language
 
     def build_developer_handbook(
@@ -109,10 +116,22 @@ class DocumentationGenerationPipeline:
         )
 
         report_progress("generating_sections", 78, progress_current=0, progress_total=len(sections))
-        generated_sections = self._generator.generate_sections(sections)
-
+        generated_sections: list[GeneratedSection] = []
         section_artifacts: list[dict[str, Any]] = []
-        for index, section in enumerate(generated_sections, start=1):
+        for index, contract in enumerate(prompt_contracts, start=1):
+            try:
+                generated = self._section_generator.generate_section(contract)
+            except Exception as exc:
+                self._publish_generation_error_safely(
+                    run=run,
+                    contract=contract,
+                    error=exc,
+                    completed_sections=generated_sections,
+                )
+                raise
+
+            section = generated.section
+            generated_sections.append(section)
             artifact = self._publish_markdown(
                 run=run,
                 artifact_kind="section_markdown",
@@ -186,6 +205,7 @@ class DocumentationGenerationPipeline:
                     for section in sections
                 },
                 "generated_sections_total": len(generated_sections),
+                "generation_summary": _generation_summary(generated_sections),
                 "evidence_pack_artifact": evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
                 "documentation_artifact": documentation_artifact,
@@ -274,6 +294,48 @@ class DocumentationGenerationPipeline:
             },
         )
 
+    def _publish_generation_error_safely(
+        self,
+        *,
+        run: ClaimedDocumentationRun,
+        contract: SectionPromptContract,
+        error: Exception,
+        completed_sections: list[GeneratedSection],
+    ) -> None:
+        try:
+            self._publish_json(
+                run=run,
+                artifact_kind="generation_error_manifest",
+                section_key=None,
+                key=(
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                    f"/documentation-runs/{run.id}/generation_errors.schema-v1.json"
+                ),
+                payload={
+                    "schema_version": 1,
+                    "artifact_kind": "generation_error_manifest",
+                    "documentation_run_id": run.id,
+                    "repository_id": run.repository_id,
+                    "snapshot_id": run.snapshot_id,
+                    "template_kind": run.template_kind,
+                    "completed_sections": [
+                        {
+                            "section_key": section.section_key,
+                            "title": section.title,
+                            "ordinal": section.ordinal,
+                        }
+                        for section in completed_sections
+                    ],
+                    "errors": [_section_error(contract, error)],
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Could not publish generation error manifest for documentation_run=%s",
+                run.id,
+                exc_info=True,
+            )
+
 
 def _latest_by_kind(refs: list[AnalysisArtifactRef]) -> dict[str, AnalysisArtifactRef]:
     latest: dict[str, AnalysisArtifactRef] = {}
@@ -282,6 +344,67 @@ def _latest_by_kind(refs: list[AnalysisArtifactRef]) -> dict[str, AnalysisArtifa
         if current is None or ref.schema_version > current.schema_version:
             latest[ref.artifact_kind] = ref
     return latest
+
+
+def _generation_summary(sections: list[GeneratedSection]) -> dict[str, Any]:
+    metadata = [section.generation or {} for section in sections]
+    return {
+        "provider": _same_or_list(item.get("provider") for item in metadata),
+        "model": _same_or_list(item.get("model") for item in metadata),
+        "sections": {
+            section.section_key: section.generation or {}
+            for section in sections
+        },
+        "prompt_tokens": _sum_int(item.get("prompt_tokens") for item in metadata),
+        "completion_tokens": _sum_int(item.get("completion_tokens") for item in metadata),
+        "total_tokens": _sum_int(item.get("total_tokens") for item in metadata),
+        "latency_ms": _sum_int(item.get("latency_ms") for item in metadata),
+        "finish_reasons": {
+            section.section_key: (section.generation or {}).get("finish_reason")
+            for section in sections
+        },
+    }
+
+
+def _section_error(contract: SectionPromptContract, error: Exception) -> dict[str, Any]:
+    return {
+        "section_key": contract.section_key,
+        "title": contract.title,
+        "ordinal": contract.ordinal,
+        "error_type": error.__class__.__name__,
+        "error_code": getattr(error, "error_code", "section_generation_failed"),
+        "retryable": bool(getattr(error, "retryable", False)),
+        "message": _truncate(str(error), 2000),
+    }
+
+
+def _same_or_list(values: Any) -> Any:
+    unique = sorted({value for value in values if value is not None})
+    if not unique:
+        return None
+    if len(unique) == 1:
+        return unique[0]
+    return unique
+
+
+def _sum_int(values: Any) -> int | None:
+    total = 0
+    seen = False
+    for value in values:
+        if value is None:
+            continue
+        try:
+            total += int(value)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+    return total if seen else None
+
+
+def _truncate(value: str, max_length: int) -> str:
+    if not value:
+        return ""
+    return value if len(value) <= max_length else value[:max_length]
 
 
 def _attach_prompt_contracts(

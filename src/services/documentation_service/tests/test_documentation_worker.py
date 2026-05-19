@@ -2,6 +2,7 @@ import pytest
 
 pytest.importorskip("psycopg")
 
+from app.infra.llm_client import LlmProviderError  # noqa: E402
 from app.worker.documentation_worker import DocumentationWorker, WorkerSettings  # noqa: E402
 from app.worker.job_store import ClaimedDocumentationRun  # noqa: E402
 
@@ -35,6 +36,33 @@ def test_worker_plans_sections_and_transitions_claimed_run_to_success() -> None:
     assert store.succeeded_summary["sections_total"] == 1
 
 
+def test_worker_requeues_retryable_llm_error_when_attempts_remain() -> None:
+    store = FakeStore(max_attempts=3)
+    pipeline = FailingPlanningPipeline(
+        LlmProviderError(
+            "rate limited",
+            error_code="llm_provider_rate_limited",
+            retryable=True,
+        )
+    )
+    worker = DocumentationWorker(
+        store=store,  # type: ignore[arg-type]
+        planning_pipeline=pipeline,  # type: ignore[arg-type]
+        worker_settings=WorkerSettings(
+            worker_id="worker-a",
+            poll_interval_s=0,
+            heartbeat_seconds=60,
+        ),
+    )
+
+    assert worker.run_once() is True
+
+    assert store.failed_call == {
+        "error_code": "llm_provider_rate_limited",
+        "retryable": True,
+    }
+
+
 class FakePlanningPipeline:
     def __init__(self):
         self.planned_run_id = None
@@ -49,6 +77,14 @@ class FakePlanningPipeline:
         return FakePlanResult()
 
 
+class FailingPlanningPipeline:
+    def __init__(self, error: Exception):
+        self._error = error
+
+    def build_developer_handbook(self, run: ClaimedDocumentationRun, *, report_progress):
+        raise self._error
+
+
 class FakePlanResult:
     sections = [object()]
     summary = {
@@ -58,10 +94,12 @@ class FakePlanResult:
 
 
 class FakeStore:
-    def __init__(self):
+    def __init__(self, *, max_attempts: int = 3):
         self._claimed = False
+        self._max_attempts = max_attempts
         self.progress_updates: list[tuple[str, int]] = []
         self.succeeded_summary = None
+        self.failed_call = None
 
     def claim_next(self, worker_id: str):
         if self._claimed:
@@ -76,7 +114,7 @@ class FakeStore:
             base_snapshot_id=None,
             template_kind="developer_handbook",
             attempt=1,
-            max_attempts=3,
+            max_attempts=self._max_attempts,
         )
 
     def heartbeat(self, run_id: str, worker_id: str) -> None:
@@ -96,5 +134,17 @@ class FakeStore:
     def mark_succeeded(self, run_id: str, worker_id: str, *, verification_summary=None) -> None:
         self.succeeded_summary = verification_summary
 
-    def mark_failed(self, run_id: str, worker_id: str, error_code: str, error_message: str) -> bool:
-        raise AssertionError(f"Unexpected failure: {error_code} {error_message}")
+    def mark_failed(
+        self,
+        run_id: str,
+        worker_id: str,
+        error_code: str,
+        error_message: str,
+        *,
+        retryable: bool = False,
+    ) -> bool:
+        self.failed_call = {
+            "error_code": error_code,
+            "retryable": retryable,
+        }
+        return True

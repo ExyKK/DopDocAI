@@ -998,7 +998,9 @@
 
 ### DOCS-010 — Добавить LLM provider layer в `documentation_service`
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-009`, `CHAT-003`
+- Artifact: [AI Runtime Configuration](./architecture/ai-runtime-config.md)
 - Goal: `documentation_service` должен вызывать внешнюю LLM через конфигурируемый provider, не завязываясь на конкретный OpenRouter model id.
 - Tasks:
 - вынести LLM-клиент в отдельный infrastructure слой по аналогии с `ChatService`;
@@ -1009,6 +1011,10 @@
 - Acceptance:
 - documentation worker может сгенерировать одну секцию через real LLM provider или stub без изменения pipeline-кода;
 - provider/model/latency/token usage сохраняются в run summary.
+- Notes:
+- реализован `app.infra.llm_client` с `stub`, `openai_compatible` и `openrouter`;
+- OpenRouter запросы получают attribution headers, metadata, provider routing JSON и `provider.max_price` knobs;
+- timeout/rate-limit/5xx ошибки помечаются retryable и могут переочередить documentation run, пока не исчерпан `MaxAttempts`.
 
 ### DOCS-011 — Спроектировать prompt contract для section generation
 - Priority: `P0`
@@ -1028,10 +1034,11 @@
 - отсутствие evidence приводит к честному partial/unknown тексту, а не hallucination.
 - Notes:
 - реализован schema-versioned prompt contract manifest с `system`/`developer`/`user` messages, strict citation rules и output language `ru` по умолчанию;
-- добавлены golden fixture и unit coverage; фактический LLM вызов остаётся в `DOCS-010`/`DOCS-012`.
+- добавлены golden fixture и unit coverage; фактический LLM вызов подключён в `DOCS-010`/`DOCS-012`.
 
 ### DOCS-012 — Заменить deterministic `developer_handbook` generator на LLM-backed generation
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-010`, `DOCS-011`
 - Goal: убрать deterministic prose generator из production path и генерировать полезные markdown sections через LLM.
 - Tasks:
@@ -1044,6 +1051,10 @@
 - manual `index -> documentation` run создаёт LLM-generated `developer_handbook`;
 - deterministic markdown больше не используется при `DOCS_LLM_PROVIDER != stub`;
 - failed section не теряет уже опубликованные diagnostics и переводит run в корректный failed/retryable статус.
+- Notes:
+- секции генерируются последовательно из prompt contracts, публикуются сразу после успешной генерации и затем собираются в общий `documentation.md`;
+- manifest и run summary сохраняют provider/model/usage/finish_reason/latency per section;
+- при ошибке генерации публикуется `generation_errors.schema-v1.json`, а retryable LLM ошибки возвращают run в `queued`, если попытки ещё доступны.
 
 ### DOCS-013 — Добавить LLM cost controls и экспериментальную оценку качества
 - Priority: `P1`

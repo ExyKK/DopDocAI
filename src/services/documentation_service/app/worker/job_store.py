@@ -207,8 +207,45 @@ class DocumentationRunStore:
             if row.rowcount != 1:
                 raise LeaseLostError(f"Lease lost for documentation_run {run_id}.")
 
-    def mark_failed(self, run_id: str, worker_id: str, error_code: str, error_message: str) -> bool:
+    def mark_failed(
+        self,
+        run_id: str,
+        worker_id: str,
+        error_code: str,
+        error_message: str,
+        *,
+        retryable: bool = False,
+    ) -> bool:
         with self._connect() as conn:
+            if retryable:
+                row = conn.execute(
+                    sql.SQL(
+                        """
+                        UPDATE {schema}.documentation_runs
+                        SET
+                            "Status" = 'queued',
+                            "Stage" = 'queued',
+                            "ProgressPct" = 0,
+                            "ProgressCurrent" = 0,
+                            "ProgressTotal" = 0,
+                            "ErrorCode" = %s,
+                            "ErrorMessage" = %s,
+                            "WorkerId" = NULL,
+                            "LeaseUntil" = NULL,
+                            "HeartbeatAt" = now(),
+                            "FinishedAt" = NULL,
+                            "UpdatedAt" = now()
+                        WHERE "Id" = %s
+                        AND "Status" = 'running'
+                        AND "WorkerId" = %s
+                        AND "Attempt" < "MaxAttempts";
+                        """
+                    ).format(schema=sql.Identifier(self._schema)),
+                    (error_code, _truncate(error_message, 4000), run_id, worker_id),
+                )
+
+                return row.rowcount == 1
+
             row = conn.execute(
                 sql.SQL(
                     """

@@ -148,11 +148,13 @@ class DocumentationWorker:
                 run.id,
                 error_code,
             )
+            retryable = _is_retryable_error(exc) and run.attempt < run.max_attempts
             updated = self._store.mark_failed(
                 run.id,
                 self._settings.worker_id,
                 error_code,
                 str(exc),
+                retryable=retryable,
             )
             if not updated:
                 logger.warning(
@@ -226,6 +228,7 @@ def _object_storage():
 
 def _planning_pipeline():
     from app.core.config import settings
+    from app.infra.llm_client import LlmClientConfig, create_llm_provider
     from app.infra.repository_service_client import RepositoryServiceClient
     from app.infra.retrieval_client import RetrievalClient
     from app.pipeline.documentation_pipeline import DocumentationGenerationPipeline
@@ -248,6 +251,24 @@ def _planning_pipeline():
         ),
         storage=_object_storage(),
         retrieval=retrieval,
+        llm_provider=create_llm_provider(
+            LlmClientConfig(
+                provider=settings.llm_provider,
+                endpoint=str(settings.llm_endpoint),
+                api_key=settings.llm_api_key,
+                model=settings.llm_model,
+                timeout_s=settings.llm_timeout_seconds,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+                top_p=settings.llm_top_p,
+                repetition_penalty=settings.llm_repetition_penalty,
+                openrouter_site_url=settings.llm_openrouter_site_url,
+                openrouter_app_title=settings.llm_openrouter_app_title,
+                provider_options_json=settings.llm_provider_options_json,
+                provider_max_price_prompt=settings.llm_provider_max_price_prompt,
+                provider_max_price_completion=settings.llm_provider_max_price_completion,
+            )
+        ),
         evidence_pack_budget=EvidencePackBudget(
             max_tokens=settings.evidence_pack_max_tokens,
             max_source_tokens=settings.evidence_pack_max_source_tokens,
@@ -261,6 +282,9 @@ def _map_error_code(exc: Exception) -> str:
     if isinstance(exc, LeaseLostError):
         return "worker_lease_lost"
 
+    if exc.__class__.__name__ == "LlmProviderError":
+        return getattr(exc, "error_code", "llm_provider_failed")
+
     if exc.__class__.__name__ == "ObjectStorageError":
         return "artifact_publish_failed"
 
@@ -272,6 +296,10 @@ def _map_error_code(exc: Exception) -> str:
         return "transient_infrastructure_failure"
 
     return "unknown_error"
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    return bool(getattr(exc, "retryable", False))
 
 
 if __name__ == "__main__":
