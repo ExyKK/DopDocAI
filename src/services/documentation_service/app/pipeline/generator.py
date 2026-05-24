@@ -13,9 +13,9 @@ class GeneratedSection:
 
 
 class DeveloperHandbookGenerator:
-    def assemble_document(self, sections: list[GeneratedSection]) -> str:
+    def assemble_document(self, sections: list[GeneratedSection], *, template_kind: str) -> str:
         lines = [
-            "# Developer Handbook",
+            f"# {_document_title(template_kind)}",
             "",
             "This handbook was generated from indexed repository artifacts and retrieval evidence.",
             "",
@@ -38,6 +38,9 @@ class DeveloperHandbookGenerator:
         repository_id: str,
         snapshot_id: str,
         template_kind: str,
+        requested_template_kind: str | None = None,
+        template_selection: dict[str, Any] | None = None,
+        repository_classification: dict[str, Any] | None = None,
         sections: list[GeneratedSection],
         section_artifacts: list[dict[str, Any]],
         documentation_artifact: dict[str, Any],
@@ -51,7 +54,10 @@ class DeveloperHandbookGenerator:
             "repository_id": repository_id,
             "snapshot_id": snapshot_id,
             "template_kind": template_kind,
-            "artifact_kind": "developer_handbook",
+            "requested_template_kind": requested_template_kind or template_kind,
+            "artifact_kind": template_kind,
+            "template_selection": template_selection,
+            "repository_classification": repository_classification,
             "sections": [
                 {
                     "section_key": section.section_key,
@@ -72,3 +78,11 @@ class DeveloperHandbookGenerator:
 
 def _anchor(value: str) -> str:
     return value.lower().replace(",", "").replace(" ", "-")
+
+
+def _document_title(template_kind: str) -> str:
+    return {
+        "developer_handbook": "Developer Handbook",
+        "go_library_handbook": "Go Library Handbook",
+        "monorepo_web_app_handbook": "Monorepo Web App Handbook",
+    }.get(template_kind, "Developer Handbook")

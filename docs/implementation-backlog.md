@@ -1115,6 +1115,7 @@
 
 ### DOCS-016 — Ввести repo classification и typed documentation templates
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-012`, `INGEST-017`
 - Goal: документация должна подстраиваться под тип репозитория, а не всегда использовать один `developer_handbook`.
 - Tasks:
@@ -1128,10 +1129,32 @@
 - `spf13/cobra` получает library-oriented sections: public API, command lifecycle, flags/args, completions, doc generation, testing;
 - `image-board` получает monorepo-oriented sections: service map, local development, request flows, data model, API surface, frontend, deployment;
 - generic `developer_handbook` остаётся fallback, а не основной путь для всех репозиториев.
+- Notes:
+- добавлен artifact-driven classifier с kinds `library`, `cli_tool`, `backend_service`, `frontend_app`, `monorepo_web_app`, `mixed`;
+- default/requested `developer_handbook` теперь работает как auto-selection и разворачивается в `go_library_handbook` или `monorepo_web_app_handbook`, когда признаки достаточно явные;
+- явные `go_library_handbook`/`monorepo_web_app_handbook` поддерживаются как manual override;
+- выбранный effective template, requested template и classification summary сохраняются в manifest/run summary;
+- добавлены typed section sets для Cobra-like Go library и image-board-like monorepo web app.
+
+### DOCS-016B — Передавать section-specific instructions в prompt contract
+- Priority: `P0`
+- Depends on: `DOCS-016`
+- Goal: typed templates должны управлять не только retrieval-запросами и названиями секций, но и тем, что LLM обязана раскрыть в каждой секции.
+- Tasks:
+- расширить `SectionTemplate` полями вроде `purpose`, `must_cover`, `avoid`, `output_style`;
+- добавить `section_spec` в prompt contract каждой секции;
+- для `go_library_handbook` явно описать ожидания к public API, lifecycle, flags/args, completions, doc generation и testing;
+- для `monorepo_web_app_handbook` явно описать ожидания к service map, local development, request flows, API surface, frontend и deployment;
+- обновить developer prompt: следовать `section_spec`, не смешивать соседние секции и не превращать overview в полный inventory;
+- покрыть тестами наличие section-specific instructions в prompt contract.
+- Acceptance:
+- prompt contract содержит machine-readable спецификацию секции помимо evidence;
+- typed templates дают модели конкретные задачи для секции, а не только набор keyword retrieval hints;
+- `DOCS-017` может переиспользовать те же section specs при раскладке секций по intent-based documents.
 
 ### DOCS-017 — Разделить документацию на intent-based artifacts
 - Priority: `P1`
-- Depends on: `DOCS-016`
+- Depends on: `DOCS-016`, `DOCS-016B`
 - Goal: генерировать не один большой handbook, а набор полезных документов под разные сценарии чтения.
 - Tasks:
 - добавить `repository_brief.md`: краткое понимание проекта за 1-2 страницы;

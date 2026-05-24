@@ -85,10 +85,15 @@ def test_prompt_contract_uses_only_evidence_pack_source_ids() -> None:
     )
     section.rendered_evidence_pack = build_rendered_evidence_pack(section.evidence_pack)
 
-    contract = build_section_prompt_contract(section, output_language="ru")
+    contract = build_section_prompt_contract(
+        section,
+        template_kind="developer_handbook",
+        output_language="ru",
+    )
     payload = contract.to_dict()
 
     assert payload["schema_version"] == 1
+    assert payload["template_kind"] == "developer_handbook"
     assert payload["source_ids"] == ["S1"]
     assert payload["source_index"][0]["source_id"] == "S1"
     assert "Use only source ids listed in the evidence pack" in payload["messages"][1]["content"]
@@ -125,7 +130,11 @@ def test_prompt_contract_fixture_rules_are_present() -> None:
     )
     section.rendered_evidence_pack = build_rendered_evidence_pack(section.evidence_pack)
 
-    contract = build_section_prompt_contract(section, output_language=fixture["output_language"])
+    contract = build_section_prompt_contract(
+        section,
+        template_kind=fixture["template_kind"],
+        output_language=fixture["output_language"],
+    )
     developer_message = contract.messages[1].content
 
     assert [message.role for message in contract.messages] == fixture["expected_message_roles"]

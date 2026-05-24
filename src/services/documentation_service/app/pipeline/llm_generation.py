@@ -26,7 +26,7 @@ class LlmSectionGenerator:
             metadata={
                 "task": "documentation_section_generation",
                 "section_key": contract.section_key,
-                "template_kind": "developer_handbook",
+                "template_kind": contract.template_kind,
             },
         )
         metadata: dict[str, object] = {

@@ -159,7 +159,22 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
 
     key = builder.template.key
     if key == "overview":
-        _from_project_model(builder, project_model, ["workspace_units", "important_packages", "integrations"])
+        _from_project_model(
+            builder,
+            project_model,
+            [
+                "summary",
+                "repository_layout",
+                "workspace_units",
+                "go",
+                "code_outline",
+                "configuration",
+                "external_integrations",
+                "http_surface",
+                "important_packages",
+                "integrations",
+            ],
+        )
         _from_package_graph(builder, package_graph, ["modules", "packages"])
         _from_commit_log(builder, commit_log, current_file_index)
     elif key == "repository_layout":
@@ -198,6 +213,51 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
         _from_project_model(builder, project_model, ["diagnostics", "unsupported_patterns", "truncated"])
         _from_config_inventory(builder, config_inventory, ["truncated", "unsupported_patterns"])
         _from_commit_log(builder, commit_log, current_file_index)
+    elif key == "public_api":
+        _from_project_model(builder, project_model, ["go", "code_outline", "workspace_units"])
+        _from_package_graph(builder, package_graph, ["modules", "packages"])
+    elif key == "command_lifecycle":
+        _from_project_model(builder, project_model, ["go", "code_outline", "workspace_units"])
+        _from_package_graph(builder, package_graph, ["entrypoint_packages", "packages", "edges"])
+    elif key == "flags_and_args":
+        _from_config_inventory(builder, config_inventory, ["flags", "config_structs"])
+        _from_project_model(builder, project_model, ["go", "code_outline"])
+    elif key == "completions":
+        _from_project_model(builder, project_model, ["go", "code_outline"])
+        _from_package_graph(builder, package_graph, ["packages"])
+    elif key == "doc_generation":
+        _from_project_model(builder, project_model, ["go", "code_outline", "repository_layout"])
+        _from_package_graph(builder, package_graph, ["packages"])
+    elif key == "testing":
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "go"])
+        _from_package_graph(builder, package_graph, ["packages"])
+    elif key == "service_map":
+        _from_project_model(
+            builder,
+            project_model,
+            ["summary", "repository_layout", "workspace_units", "http_surface", "external_integrations"],
+        )
+        _from_package_graph(builder, package_graph, ["modules", "packages"])
+    elif key == "local_development":
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"])
+        _from_config_inventory(builder, config_inventory, ["config_files", "dependency_locks", "env_vars"])
+        _add_manifest_sources(builder, project_model, config_inventory)
+    elif key == "request_flows":
+        _from_project_model(builder, project_model, ["http_surface", "external_integrations", "workspace_units"])
+        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"])
+    elif key == "data_model":
+        _from_config_inventory(builder, config_inventory, ["data_contracts", "config_files"])
+        _from_project_model(builder, project_model, ["code_outline", "go"])
+    elif key == "api_surface":
+        _from_project_model(builder, project_model, ["http_surface", "workspace_units"])
+        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"])
+    elif key == "frontend":
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units"])
+        _from_config_inventory(builder, config_inventory, ["dependency_locks", "config_files"])
+    elif key == "deployment":
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"])
+        _from_config_inventory(builder, config_inventory, ["config_files", "env_vars", "dependency_locks"])
+        _add_manifest_sources(builder, project_model, config_inventory)
 
 
 def _from_project_model(builder: _SectionBuilder, project_model: dict[str, Any], keys: list[str]) -> None:
@@ -303,6 +363,19 @@ def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any
 
     return section_key in {
         "entry_points",
+        "public_api",
+        "command_lifecycle",
+        "flags_and_args",
+        "completions",
+        "doc_generation",
+        "testing",
+        "service_map",
+        "local_development",
+        "request_flows",
+        "data_model",
+        "api_surface",
+        "frontend",
+        "deployment",
         "major_flows",
         "domain_entities",
         "build_run_test",
@@ -523,6 +596,17 @@ def _manifest_like_files(project_model: dict[str, Any]) -> list[str]:
             if isinstance(value, str):
                 result.append(value)
     return _dedupe(result)
+
+
+def _add_manifest_sources(
+    builder: _SectionBuilder,
+    project_model: dict[str, Any],
+    config_inventory: dict[str, Any],
+) -> None:
+    for item in _manifest_like_files(project_model)[:20]:
+        builder.add_file_source(item, "development/deployment manifest")
+    for item in _as_list(config_inventory.get("config_files"))[:20]:
+        builder.add_file_source(_path_from(item), "configuration file")
 
 
 def _dedupe(items: list[str]) -> list[str]:

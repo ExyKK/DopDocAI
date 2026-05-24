@@ -24,6 +24,7 @@ class PromptMessage:
 @dataclass(frozen=True)
 class SectionPromptContract:
     schema_version: int
+    template_kind: str
     section_key: str
     title: str
     ordinal: int
@@ -36,6 +37,7 @@ class SectionPromptContract:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
+            "template_kind": self.template_kind,
             "section_key": self.section_key,
             "title": self.title,
             "ordinal": self.ordinal,
@@ -50,6 +52,7 @@ class SectionPromptContract:
 def build_section_prompt_contract(
     section: SectionEvidence,
     *,
+    template_kind: str,
     output_language: str = "ru",
 ) -> SectionPromptContract:
     if section.evidence_pack is None:
@@ -79,6 +82,7 @@ def build_section_prompt_contract(
     ]
     return SectionPromptContract(
         schema_version=PROMPT_CONTRACT_VERSION,
+        template_kind=template_kind,
         section_key=section.section_key,
         title=section.title,
         ordinal=section.ordinal,

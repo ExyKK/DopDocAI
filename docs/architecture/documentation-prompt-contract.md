@@ -94,3 +94,18 @@ repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}
 `DOCS-010`/`DOCS-012` use this contract as the input to the LLM provider layer.
 Production-like runs call the configured external provider, while `stub` mode
 keeps deterministic smoke generation available without network calls.
+
+## Template Selection
+
+`DOCS-016` adds artifact-driven repository classification before section
+planning. The default `developer_handbook` request is treated as auto-selection:
+
+- Cobra-like Go libraries and CLI/library packages use `go_library_handbook`;
+- frontend + backend monorepos use `monorepo_web_app_handbook`;
+- `developer_handbook` remains the fallback for repository shapes without a
+  specialized template yet.
+
+Manual `template_kind` values `go_library_handbook` and
+`monorepo_web_app_handbook` bypass classification. Each run summary and manifest
+records the requested template, effective template, classification kind,
+confidence, signals and scores.

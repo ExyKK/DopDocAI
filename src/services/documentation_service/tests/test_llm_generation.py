@@ -15,7 +15,11 @@ from app.pipeline.rendered_evidence import build_rendered_evidence_pack
 
 def test_stub_provider_generates_markdown_from_prompt_contract() -> None:
     section = _section_with_pack()
-    contract = build_section_prompt_contract(section, output_language="ru")
+    contract = build_section_prompt_contract(
+        section,
+        template_kind="developer_handbook",
+        output_language="ru",
+    )
 
     generated = LlmSectionGenerator(StubLlmCompletionProvider()).generate_section(contract)
 
@@ -30,7 +34,11 @@ def test_stub_provider_generates_markdown_from_prompt_contract() -> None:
 
 def test_section_generator_strips_model_heading_and_records_warning() -> None:
     section = _section_with_pack()
-    contract = build_section_prompt_contract(section, output_language="ru")
+    contract = build_section_prompt_contract(
+        section,
+        template_kind="developer_handbook",
+        output_language="ru",
+    )
 
     class HeadingProvider(StubLlmCompletionProvider):
         def generate(self, messages, *, metadata=None):

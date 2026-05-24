@@ -8,6 +8,7 @@ from app.infra.llm_client import LlmCompletionProvider
 from app.infra.object_storage import ObjectStorageClient
 from app.infra.repository_service_client import AnalysisArtifactRef, RepositoryServiceClient
 from app.infra.retrieval_client import RetrievalClient
+from app.pipeline.classification import classify_repository
 from app.pipeline.evidence import EvidencePlanner, SectionEvidence
 from app.pipeline.evidence_pack import (
     EvidencePack,
@@ -25,7 +26,7 @@ from app.pipeline.rendered_evidence import (
     RenderedEvidencePack,
     build_rendered_evidence_pack_manifest,
 )
-from app.pipeline.templates import get_section_templates
+from app.pipeline.templates import get_section_templates, select_documentation_template
 from app.worker.job_store import ClaimedDocumentationRun
 
 REQUIRED_ANALYSIS_ARTIFACTS = (
@@ -72,7 +73,10 @@ class DocumentationGenerationPipeline:
         refs = self._repository_service.list_analysis_artifacts(run.repository_id, run.snapshot_id)
         latest_refs = _latest_by_kind(refs)
         artifacts = self._load_required_artifacts(latest_refs)
-        templates = get_section_templates(run.template_kind)
+        repository_classification = classify_repository(artifacts)
+        template_selection = select_documentation_template(run.template_kind, repository_classification)
+        effective_template_kind = template_selection.effective_template_kind
+        templates = get_section_templates(effective_template_kind)
 
         report_progress("planning_sections", 35, progress_total=len(templates))
         sections = self._planner.plan(
@@ -82,6 +86,7 @@ class DocumentationGenerationPipeline:
         )
         prompt_contracts = _attach_prompt_contracts(
             sections,
+            template_kind=effective_template_kind,
             output_language=self._prompt_output_language,
         )
         evidence_packs = _evidence_packs(sections)
@@ -102,7 +107,7 @@ class DocumentationGenerationPipeline:
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
                 snapshot_id=run.snapshot_id,
-                template_kind=run.template_kind,
+                template_kind=effective_template_kind,
                 packs=evidence_packs,
             ),
         )
@@ -115,7 +120,7 @@ class DocumentationGenerationPipeline:
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
                 snapshot_id=run.snapshot_id,
-                template_kind=run.template_kind,
+                template_kind=effective_template_kind,
                 contracts=prompt_contracts,
             ),
         )
@@ -131,7 +136,7 @@ class DocumentationGenerationPipeline:
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
                 snapshot_id=run.snapshot_id,
-                template_kind=run.template_kind,
+                template_kind=effective_template_kind,
                 packs=rendered_evidence_packs,
             ),
         )
@@ -146,6 +151,7 @@ class DocumentationGenerationPipeline:
                 self._publish_generation_error_safely(
                     run=run,
                     contract=contract,
+                    template_kind=effective_template_kind,
                     error=exc,
                     completed_sections=generated_sections,
                 )
@@ -163,7 +169,10 @@ class DocumentationGenerationPipeline:
             section_artifacts.append(artifact)
             report_progress("generating_sections", 78, progress_current=index, progress_total=len(sections))
 
-        document_markdown = self._generator.assemble_document(generated_sections)
+        document_markdown = self._generator.assemble_document(
+            generated_sections,
+            template_kind=effective_template_kind,
+        )
         documentation_artifact = self._publish_markdown(
             run=run,
             artifact_kind="documentation_markdown",
@@ -176,7 +185,10 @@ class DocumentationGenerationPipeline:
             documentation_run_id=run.id,
             repository_id=run.repository_id,
             snapshot_id=run.snapshot_id,
-            template_kind=run.template_kind,
+            template_kind=effective_template_kind,
+            requested_template_kind=run.template_kind,
+            template_selection=template_selection.to_dict(),
+            repository_classification=repository_classification.to_dict(),
             sections=generated_sections,
             section_artifacts=section_artifacts,
             documentation_artifact=documentation_artifact,
@@ -202,7 +214,10 @@ class DocumentationGenerationPipeline:
             sections=sections,
             summary={
                 "scaffold_only": False,
-                "template_kind": run.template_kind,
+                "template_kind": effective_template_kind,
+                "requested_template_kind": run.template_kind,
+                "template_selection": template_selection.to_dict(),
+                "repository_classification": repository_classification.to_dict(),
                 "source_index_run_id": run.source_index_run_id,
                 "analysis_artifacts": {
                     kind: {
@@ -338,6 +353,7 @@ class DocumentationGenerationPipeline:
         *,
         run: ClaimedDocumentationRun,
         contract: SectionPromptContract,
+        template_kind: str,
         error: Exception,
         completed_sections: list[GeneratedSection],
     ) -> None:
@@ -356,7 +372,8 @@ class DocumentationGenerationPipeline:
                     "documentation_run_id": run.id,
                     "repository_id": run.repository_id,
                     "snapshot_id": run.snapshot_id,
-                    "template_kind": run.template_kind,
+                    "template_kind": template_kind,
+                    "requested_template_kind": run.template_kind,
                     "completed_sections": [
                         {
                             "section_key": section.section_key,
@@ -463,11 +480,16 @@ def _truncate(value: str, max_length: int) -> str:
 def _attach_prompt_contracts(
     sections: list[SectionEvidence],
     *,
+    template_kind: str,
     output_language: str,
 ) -> list[SectionPromptContract]:
     contracts: list[SectionPromptContract] = []
     for section in sections:
-        contract = build_section_prompt_contract(section, output_language=output_language)
+        contract = build_section_prompt_contract(
+            section,
+            template_kind=template_kind,
+            output_language=output_language,
+        )
         section.prompt_contract = contract.to_dict()
         contracts.append(contract)
     return contracts
