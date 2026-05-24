@@ -24,6 +24,8 @@ class EvidencePackSource:
     end_line: int | None = None
     chunk_id: str | None = None
     score: float | None = None
+    language: str | None = None
+    source_scope: str | None = None
     truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +39,8 @@ class EvidencePackSource:
             "end_line": self.end_line,
             "chunk_id": self.chunk_id,
             "score": self.score,
+            "language": self.language,
+            "source_scope": self.source_scope,
             "selection_reason": self.selection_reason,
             "estimated_tokens": self.estimated_tokens,
             "truncated": self.truncated,
@@ -53,6 +57,8 @@ class OmittedEvidenceSource:
     file_path: str | None = None
     symbol_name: str | None = None
     chunk_id: str | None = None
+    language: str | None = None
+    source_scope: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,8 @@ class OmittedEvidenceSource:
             "file_path": self.file_path,
             "symbol_name": self.symbol_name,
             "chunk_id": self.chunk_id,
+            "language": self.language,
+            "source_scope": self.source_scope,
             "selection_reason": self.selection_reason,
             "omitted_reason": self.omitted_reason,
             "estimated_tokens": self.estimated_tokens,
@@ -249,6 +257,8 @@ def _retrieval_candidates(
                 "end_line": match.get("end_line"),
                 "chunk_id": _optional_str(chunk_id),
                 "score": match.get("score"),
+                "language": _optional_str(match.get("language")),
+                "source_scope": _optional_str(match.get("source_scope")),
             }
         )
 
@@ -279,6 +289,8 @@ def _pack_source(
         end_line=_int_or_none(candidate.get("end_line")) or _int_or_none(source.get("end_line")),
         chunk_id=_optional_str(candidate.get("chunk_id")) or _optional_str(source.get("chunk_id")),
         score=_float_or_none(candidate.get("score")) or _float_or_none(source.get("score")),
+        language=_optional_str(candidate.get("language")) or _optional_str(source.get("language")),
+        source_scope=_optional_str(candidate.get("source_scope")) or _optional_str(source.get("source_scope")),
         selection_reason=_optional_str(candidate.get("selection_reason")) or "selected evidence",
         estimated_tokens=estimated,
         truncated=truncated,
@@ -293,6 +305,8 @@ def _omit(candidate: dict[str, Any], reason: str) -> OmittedEvidenceSource:
         file_path=_optional_str(candidate.get("file_path")),
         symbol_name=_optional_str(candidate.get("symbol_name")),
         chunk_id=_optional_str(candidate.get("chunk_id")),
+        language=_optional_str(candidate.get("language")),
+        source_scope=_optional_str(candidate.get("source_scope")),
         selection_reason=_optional_str(candidate.get("selection_reason")) or "candidate evidence",
         omitted_reason=reason,
         estimated_tokens=estimate_tokens(content),
@@ -312,7 +326,18 @@ def _artifact_kind_for_evidence_key(key: str) -> str:
         "data_contracts",
     }:
         return "config_inventory"
-    if key in {"commits", "recent_commits", "touched_files", "touched_packages", "summary"}:
+    if key in {
+        "change_events",
+        "commit_summary",
+        "touched_file_summary",
+        "touched_package_summary",
+        "merge_commit_summary",
+        "commits",
+        "recent_commits",
+        "touched_files",
+        "touched_packages",
+        "summary",
+    }:
         return "commit_log"
     return "project_model"
 

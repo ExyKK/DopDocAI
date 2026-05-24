@@ -21,6 +21,10 @@ from app.pipeline.prompt_contract import (
     build_prompt_contract_manifest,
     build_section_prompt_contract,
 )
+from app.pipeline.rendered_evidence import (
+    RenderedEvidencePack,
+    build_rendered_evidence_pack_manifest,
+)
 from app.pipeline.templates import get_section_templates
 from app.worker.job_store import ClaimedDocumentationRun
 
@@ -81,6 +85,7 @@ class DocumentationGenerationPipeline:
             output_language=self._prompt_output_language,
         )
         evidence_packs = _evidence_packs(sections)
+        rendered_evidence_packs = _rendered_evidence_packs(sections)
 
         report_progress("retrieving_evidence", 65, progress_current=len(sections), progress_total=len(sections))
         self._repository_service.replace_documentation_sections(
@@ -112,6 +117,22 @@ class DocumentationGenerationPipeline:
                 snapshot_id=run.snapshot_id,
                 template_kind=run.template_kind,
                 contracts=prompt_contracts,
+            ),
+        )
+        rendered_evidence_pack_artifact = self._publish_json(
+            run=run,
+            artifact_kind="rendered_evidence_pack_manifest",
+            section_key=None,
+            key=(
+                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
+                "/rendered_evidence_packs.schema-v1.json"
+            ),
+            payload=build_rendered_evidence_pack_manifest(
+                documentation_run_id=run.id,
+                repository_id=run.repository_id,
+                snapshot_id=run.snapshot_id,
+                template_kind=run.template_kind,
+                packs=rendered_evidence_packs,
             ),
         )
 
@@ -161,6 +182,7 @@ class DocumentationGenerationPipeline:
             documentation_artifact=documentation_artifact,
             evidence_pack_artifact=evidence_pack_artifact,
             prompt_contract_artifact=prompt_contract_artifact,
+            rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
         )
         manifest_artifact = self._publish_json(
             run=run,
@@ -172,8 +194,8 @@ class DocumentationGenerationPipeline:
         report_progress(
             "publishing_artifacts",
             92,
-            progress_current=len(section_artifacts) + 4,
-            progress_total=len(section_artifacts) + 4,
+            progress_current=len(section_artifacts) + 5,
+            progress_total=len(section_artifacts) + 5,
         )
 
         return DocumentationPlanResult(
@@ -204,9 +226,26 @@ class DocumentationGenerationPipeline:
                     section.section_key: section.evidence_pack.estimated_tokens if section.evidence_pack else 0
                     for section in sections
                 },
+                "rendered_evidence_pack_counts": {
+                    section.section_key: (
+                        len(section.rendered_evidence_pack.sources)
+                        if section.rendered_evidence_pack
+                        else 0
+                    )
+                    for section in sections
+                },
+                "rendered_evidence_pack_estimated_tokens": {
+                    section.section_key: (
+                        section.rendered_evidence_pack.estimated_tokens
+                        if section.rendered_evidence_pack
+                        else 0
+                    )
+                    for section in sections
+                },
                 "generated_sections_total": len(generated_sections),
                 "generation_summary": _generation_summary(generated_sections),
                 "evidence_pack_artifact": evidence_pack_artifact,
+                "rendered_evidence_pack_artifact": rendered_evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
                 "documentation_artifact": documentation_artifact,
                 "manifest_artifact": manifest_artifact,
@@ -363,6 +402,20 @@ def _generation_summary(sections: list[GeneratedSection]) -> dict[str, Any]:
             section.section_key: (section.generation or {}).get("finish_reason")
             for section in sections
         },
+        "quality_statuses": {
+            section.section_key: (section.generation or {}).get("quality_status")
+            for section in sections
+        },
+        "degraded_sections": [
+            section.section_key
+            for section in sections
+            if (section.generation or {}).get("quality_status") == "degraded"
+        ],
+        "warnings": {
+            section.section_key: (section.generation or {}).get("warnings")
+            for section in sections
+            if (section.generation or {}).get("warnings")
+        },
     }
 
 
@@ -426,4 +479,13 @@ def _evidence_packs(sections: list[SectionEvidence]) -> list[EvidencePack]:
         if section.evidence_pack is None:
             raise ValueError(f"Section {section.section_key} has no evidence pack.")
         packs.append(section.evidence_pack)
+    return packs
+
+
+def _rendered_evidence_packs(sections: list[SectionEvidence]) -> list[RenderedEvidencePack]:
+    packs: list[RenderedEvidencePack] = []
+    for section in sections:
+        if section.rendered_evidence_pack is None:
+            raise ValueError(f"Section {section.section_key} has no rendered evidence pack.")
+        packs.append(section.rendered_evidence_pack)
     return packs

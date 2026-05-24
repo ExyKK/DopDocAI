@@ -4,6 +4,7 @@ from typing import Any
 
 from app.pipeline.evidence import SectionEvidence
 from app.pipeline.evidence_pack import EvidencePack
+from app.pipeline.rendered_evidence import RenderedEvidencePack
 
 PROMPT_CONTRACT_VERSION = 1
 
@@ -29,6 +30,7 @@ class SectionPromptContract:
     output_language: str
     messages: list[PromptMessage]
     source_ids: list[str]
+    source_index: list[dict[str, Any]]
     estimated_input_tokens: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -39,6 +41,7 @@ class SectionPromptContract:
             "ordinal": self.ordinal,
             "output_language": self.output_language,
             "source_ids": self.source_ids,
+            "source_index": self.source_index,
             "estimated_input_tokens": self.estimated_input_tokens,
             "messages": [message.to_dict() for message in self.messages],
         }
@@ -51,8 +54,11 @@ def build_section_prompt_contract(
 ) -> SectionPromptContract:
     if section.evidence_pack is None:
         raise ValueError(f"Section {section.section_key} has no evidence pack.")
+    if section.rendered_evidence_pack is None:
+        raise ValueError(f"Section {section.section_key} has no rendered evidence pack.")
 
     evidence_pack = section.evidence_pack
+    rendered_evidence_pack = section.rendered_evidence_pack
     messages = [
         PromptMessage(
             role="system",
@@ -68,7 +74,7 @@ def build_section_prompt_contract(
         ),
         PromptMessage(
             role="user",
-            content=_user_payload(section, evidence_pack),
+            content=_user_payload(section, evidence_pack, rendered_evidence_pack),
         ),
     ]
     return SectionPromptContract(
@@ -79,6 +85,7 @@ def build_section_prompt_contract(
         output_language=output_language,
         messages=messages,
         source_ids=[source.source_id for source in evidence_pack.sources],
+        source_index=rendered_evidence_pack.to_prompt_dict()["source_index"],
         estimated_input_tokens=sum(_estimate_tokens(message.content) for message in messages),
     )
 
@@ -118,17 +125,24 @@ def _developer_instructions(output_language: str) -> str:
         [
             language_instruction,
             "Generate only the requested documentation section, not the whole document.",
-            "Use Markdown.",
+            "Use Markdown, but return the section body only.",
+            "Do not start with a Markdown heading (`#`, `##`, etc.); the pipeline adds the canonical section heading.",
+            "Do not add a Sources/References appendix; the pipeline appends source mappings automatically.",
             "Every factual claim about repository behavior, files, commands, APIs, dependencies, or configuration must cite one or more source ids in square brackets, for example [S1] or [S2][S4].",
             "Use only source ids listed in the evidence pack.",
             "If evidence is weak or missing, say so explicitly and keep the section partial.",
             "Prefer precise repository terms from the evidence over generic wording.",
-            "Do not include raw JSON dumps unless they are necessary to describe configuration or commands.",
+            "Use commit evidence only as recent history. A historical `deleted` event does not mean the file is absent now unless `current_file_state` is `absent`.",
+            "Do not include raw JSON dumps or repeat evidence tables wholesale.",
         ]
     )
 
 
-def _user_payload(section: SectionEvidence, evidence_pack: EvidencePack) -> str:
+def _user_payload(
+    section: SectionEvidence,
+    evidence_pack: EvidencePack,
+    rendered_evidence_pack: RenderedEvidencePack,
+) -> str:
     payload = {
         "task": "Generate one developer handbook section.",
         "section": {
@@ -141,7 +155,15 @@ def _user_payload(section: SectionEvidence, evidence_pack: EvidencePack) -> str:
             "required": True,
             "unknown_policy": "State that evidence is missing instead of guessing.",
         },
-        "evidence_pack": evidence_pack.to_dict(),
+        "evidence_pack": {
+            "schema_version": rendered_evidence_pack.schema_version,
+            "format": "rendered_markdown_sources",
+            "source_ids": [source.source_id for source in evidence_pack.sources],
+            "raw_evidence_summary": rendered_evidence_pack.raw_evidence_summary,
+            "warnings": rendered_evidence_pack.warnings,
+            "sources": rendered_evidence_pack.to_prompt_dict()["sources"],
+            "source_index": rendered_evidence_pack.to_prompt_dict()["source_index"],
+        },
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str)
 

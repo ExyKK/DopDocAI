@@ -3,6 +3,7 @@ from typing import Any
 
 from app.infra.retrieval_client import RetrievalClient, RetrievalClientError, RetrievedSource
 from app.pipeline.evidence_pack import EvidencePack, EvidencePackBudget, build_evidence_pack
+from app.pipeline.rendered_evidence import RenderedEvidencePack, build_rendered_evidence_pack
 from app.pipeline.templates import SectionTemplate
 
 
@@ -15,6 +16,7 @@ class SectionEvidence:
     sources: list[dict[str, Any]]
     evidence: dict[str, Any] = field(default_factory=dict)
     evidence_pack: EvidencePack | None = None
+    rendered_evidence_pack: RenderedEvidencePack | None = None
     prompt_contract: dict[str, Any] | None = None
 
     def to_request(self) -> dict[str, Any]:
@@ -54,6 +56,7 @@ class EvidencePlanner:
                 sources=section.sources,
                 budget=self._budget,
             )
+            section.rendered_evidence_pack = build_rendered_evidence_pack(section.evidence_pack)
             sections.append(section)
 
         return sections
@@ -112,6 +115,8 @@ class _SectionBuilder:
                 "end_line": source.end_line,
                 "chunk_id": source.chunk_id,
                 "score": source.score,
+                "language": source.language,
+                "source_scope": source.source_scope,
                 "note": f"retrieval: {query}",
             }
         )
@@ -150,12 +155,13 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
     package_graph = artifacts.get("package_graph") or {}
     config_inventory = artifacts.get("config_inventory") or {}
     commit_log = artifacts.get("commit_log") or {}
+    current_file_index = _current_file_index(project_model)
 
     key = builder.template.key
     if key == "overview":
         _from_project_model(builder, project_model, ["workspace_units", "important_packages", "integrations"])
         _from_package_graph(builder, package_graph, ["modules", "packages"])
-        _from_commit_log(builder, commit_log)
+        _from_commit_log(builder, commit_log, current_file_index)
     elif key == "repository_layout":
         _from_project_model(builder, project_model, ["workspace_units", "files", "ownership_hints"])
         for item in _as_list(project_model.get("workspace_units"))[:12]:
@@ -169,7 +175,7 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
         _from_package_graph(builder, package_graph, ["entrypoint_packages"])
     elif key == "major_flows":
         _from_project_model(builder, project_model, ["http_surface", "integrations", "workspace_units"])
-        _from_commit_log(builder, commit_log)
+        _from_commit_log(builder, commit_log, current_file_index)
     elif key == "domain_entities":
         _from_config_inventory(builder, config_inventory, ["data_contracts"])
         _from_project_model(builder, project_model, ["important_symbols", "important_packages"])
@@ -191,7 +197,7 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
     elif key == "known_gaps":
         _from_project_model(builder, project_model, ["diagnostics", "unsupported_patterns", "truncated"])
         _from_config_inventory(builder, config_inventory, ["truncated", "unsupported_patterns"])
-        _from_commit_log(builder, commit_log)
+        _from_commit_log(builder, commit_log, current_file_index)
 
 
 def _from_project_model(builder: _SectionBuilder, project_model: dict[str, Any], keys: list[str]) -> None:
@@ -227,15 +233,37 @@ def _from_config_inventory(builder: _SectionBuilder, config_inventory: dict[str,
             builder.evidence[key] = _compact(value)
 
 
-def _from_commit_log(builder: _SectionBuilder, commit_log: dict[str, Any]) -> None:
+def _from_commit_log(
+    builder: _SectionBuilder,
+    commit_log: dict[str, Any],
+    current_file_index: "_CurrentFileIndex",
+) -> None:
     if not commit_log:
         return
 
-    builder.add_artifact_source("commit_log", "recent commits and touched areas")
-    for key in ("commits", "recent_commits", "touched_files", "touched_packages", "summary"):
-        value = commit_log.get(key)
-        if value is not None:
-            builder.evidence[key] = _compact(value)
+    builder.add_artifact_source("commit_log", "normalized recent change events")
+    summary = commit_log.get("summary")
+    if summary is not None:
+        builder.evidence["commit_summary"] = _compact(summary)
+
+    change_events = _build_change_events(commit_log, current_file_index)
+    if change_events:
+        builder.evidence["change_events"] = change_events
+
+    touched_files = _build_touched_file_summary(commit_log, current_file_index)
+    if touched_files:
+        builder.evidence["touched_file_summary"] = touched_files
+
+    touched_packages = _as_list(commit_log.get("touched_packages"))[:24]
+    if touched_packages:
+        builder.evidence["touched_package_summary"] = [
+            _compact_package_touch(item)
+            for item in touched_packages
+        ]
+
+    merge_commits = _build_merge_commit_summary(commit_log)
+    if merge_commits:
+        builder.evidence["merge_commit_summary"] = merge_commits
 
 
 def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient) -> None:
@@ -248,6 +276,7 @@ def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient
     if not matches:
         return
 
+    filtered_matches = _filter_retrieval_matches(builder.template.key, matches)
     builder.evidence["retrieval_query"] = builder.template.retrieval_query
     builder.evidence["retrieval_matches"] = [
         {
@@ -258,11 +287,13 @@ def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient
             "end_line": match.end_line,
             "score": match.score,
             "source_kind": match.source_kind,
+            "language": match.language,
+            "source_scope": match.source_scope,
             "text": match.text,
         }
-        for match in matches[:8]
+        for match in filtered_matches[:8]
     ]
-    for match in matches:
+    for match in filtered_matches:
         builder.add_retrieved_source(match, builder.template.retrieval_query)
 
 
@@ -277,6 +308,174 @@ def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any
         "build_run_test",
         "known_gaps",
     }
+
+
+@dataclass(frozen=True)
+class _CurrentFileIndex:
+    paths: set[str]
+    complete: bool
+
+    def state_for(self, path: str | None) -> tuple[bool | None, str]:
+        if not path:
+            return None, "unknown"
+        normalized = _normalize_path(path)
+        if normalized in self.paths:
+            return True, "present"
+        if self.complete:
+            return False, "absent"
+        return None, "unknown"
+
+
+def _current_file_index(project_model: dict[str, Any]) -> _CurrentFileIndex:
+    paths: set[str] = set()
+    complete = False
+
+    files = _as_list(project_model.get("files"))
+    if files:
+        complete = True
+        for item in files:
+            path = _path_from(item)
+            if path:
+                paths.add(_normalize_path(path))
+
+    repository_layout = project_model.get("repository_layout")
+    if isinstance(repository_layout, dict):
+        for item in _as_list(repository_layout.get("key_files")):
+            path = _path_from(item)
+            if path:
+                paths.add(_normalize_path(path))
+
+    for unit in _as_list(project_model.get("workspace_units")):
+        for item in _as_list(unit.get("key_files")):
+            path = _path_from(item)
+            if path:
+                paths.add(_normalize_path(path))
+        for path in unit.get("manifest_paths") or []:
+            if isinstance(path, str) and path:
+                paths.add(_normalize_path(path))
+
+    return _CurrentFileIndex(paths=paths, complete=complete)
+
+
+def _build_change_events(
+    commit_log: dict[str, Any],
+    current_file_index: _CurrentFileIndex,
+    *,
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for commit in _as_list(commit_log.get("commits")):
+        touched_files = _as_list(commit.get("touched_files"))
+        for file_record in touched_files:
+            path = _path_from(file_record)
+            current_file_present, current_file_state = current_file_index.state_for(path)
+            events.append(
+                {
+                    "sha": _optional_str(commit.get("sha")),
+                    "short_sha": _optional_str(commit.get("short_sha")),
+                    "subject": _optional_str(commit.get("subject")),
+                    "is_merge": bool(commit.get("is_merge")),
+                    "parents_total": len(commit.get("parents") or []),
+                    "path": path,
+                    "old_path": _optional_str(file_record.get("old_path")),
+                    "status": _optional_str(file_record.get("status")),
+                    "change_type": _optional_str(file_record.get("change_type")),
+                    "current_file_present": current_file_present,
+                    "current_file_state": current_file_state,
+                }
+            )
+            if len(events) >= limit:
+                return events
+    return events
+
+
+def _build_touched_file_summary(
+    commit_log: dict[str, Any],
+    current_file_index: _CurrentFileIndex,
+    *,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in _as_list(commit_log.get("touched_files"))[:limit]:
+        path = _path_from(item)
+        current_file_present, current_file_state = current_file_index.state_for(path)
+        result.append(
+            {
+                "path": path,
+                "old_paths": item.get("old_paths") or [],
+                "commits_total": item.get("commits_total"),
+                "latest_commit_sha": _optional_str(item.get("latest_commit_sha")),
+                "change_type_counts": item.get("change_type_counts") or {},
+                "current_file_present": current_file_present,
+                "current_file_state": current_file_state,
+            }
+        )
+    return result
+
+
+def _compact_package_touch(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "package_id": item.get("package_id"),
+        "name": item.get("name"),
+        "dir_path": item.get("dir_path"),
+        "commits_total": item.get("commits_total"),
+        "files_total": item.get("files_total"),
+        "change_type_counts": item.get("change_type_counts") or {},
+        "touched_files": (item.get("touched_files") or [])[:8],
+    }
+
+
+def _build_merge_commit_summary(
+    commit_log: dict[str, Any],
+    *,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for commit in _as_list(commit_log.get("commits")):
+        if not commit.get("is_merge"):
+            continue
+        result.append(
+            {
+                "sha": _optional_str(commit.get("sha")),
+                "short_sha": _optional_str(commit.get("short_sha")),
+                "subject": _optional_str(commit.get("subject")),
+                "parents_total": len(commit.get("parents") or []),
+                "change_type_counts": commit.get("change_type_counts") or {},
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _filter_retrieval_matches(
+    section_key: str,
+    matches: list[RetrievedSource],
+) -> list[RetrievedSource]:
+    return [
+        match
+        for match in matches
+        if _allow_retrieval_match(section_key, match)
+    ]
+
+
+def _allow_retrieval_match(section_key: str, match: RetrievedSource) -> bool:
+    if section_key in {"api_reference"}:
+        return True
+    if match.source_scope == "generated":
+        return False
+    if match.source_kind == "generated":
+        return False
+    if match.file_path and _looks_generated_source_path(match.file_path):
+        return False
+    return True
+
+
+def _looks_generated_source_path(path: str) -> bool:
+    normalized = _normalize_path(path).lower()
+    if normalized.endswith("/docs/docs.go"):
+        return True
+    return any(part in {".swagger-codegen", "generated"} for part in normalized.split("/"))
 
 
 def _compact(value: Any, limit: int = 12) -> Any:
@@ -299,6 +498,17 @@ def _path_from(item: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def _normalize_path(path: str) -> str:
+    return path.strip().replace("\\", "/")
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _manifest_like_files(project_model: dict[str, Any]) -> list[str]:

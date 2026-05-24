@@ -1071,6 +1071,101 @@
 - после запуска видно, сколько стоила каждая секция и весь документ;
 - есть минимальная таблица сравнения моделей/настроек для диплома.
 
+### DOCS-014 — Добавить hygiene post-processing и source appendix
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-012`
+- Goal: убрать механические дефекты LLM output и сделать citations понятными читателю.
+- Tasks:
+- запретить модели генерировать heading секции и нормализовать output как body-only;
+- в post-process удалять ведущие `#`/`##` heading, если модель всё равно их вернула;
+- добавлять к каждой секции или к концу документа source appendix с mapping `S1 -> artifact/file/chunk`;
+- сделать source ids устойчивее в собранном документе: например `overview:S1` или section-local appendix рядом с секцией;
+- ловить очевидные текстовые артефакты: repeated n-grams, склеенные слова, незакрытые markdown/code fences, `finish_reason=length`;
+- добавить warnings в manifest/run summary, не только markdown.
+- Acceptance:
+- итоговый `documentation.md` не содержит двойных заголовков;
+- citations можно расшифровать без обращения к Postgres/MinIO;
+- секция с `finish_reason=length` или грубыми текстовыми дефектами помечается как degraded/failed для verification.
+- Notes:
+- `LlmSectionGenerator` нормализует body-only output, удаляет ведущие markdown headings и добавляет section-local `### Sources`;
+- generation metadata теперь содержит `warnings` и `quality_status`, а run summary собирает `degraded_sections`;
+- добавлены проверки на `finish_reason=length`, незакрытые code fences, склеенные повторы и repeated phrases.
+
+### DOCS-015 — Заменить raw JSON evidence на curated evidence renderers
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-009`, `DOCS-012`
+- Goal: LLM должна получать короткие, семантически подготовленные факты, а не большие JSON dumps.
+- Tasks:
+- сделать per-artifact renderers для `project_model`, `package_graph`, `config_inventory`, `commit_log`;
+- рендерить evidence в Markdown/таблицы/списки с явными границами record'ов;
+- ограничивать package/config/commit evidence top-N по релевантности к секции;
+- не передавать generated Swagger chunks в общий retrieval context по умолчанию;
+- для API sections использовать compact `api_specs` summaries вместо raw `docs.go`;
+- сохранять и raw evidence pack, и rendered evidence pack для отладки.
+- Acceptance:
+- prompt contracts содержат readable rendered evidence вместо больших вложенных JSON массивов;
+- generated files не загрязняют non-API sections;
+- модель перестаёт путать поля соседних JSON objects в commit/config evidence.
+- Notes:
+- добавлен `rendered_evidence_pack_manifest` с markdown/table renderers для project/package/config/commit evidence;
+- prompt contract передаёт rendered sources вместо raw nested JSON, при этом raw `evidence_pack_manifest` сохраняется для debug;
+- retrieval context фильтрует generated Swagger/codegen chunks для generic handbook sections.
+
+### DOCS-016 — Ввести repo classification и typed documentation templates
+- Priority: `P0`
+- Depends on: `DOCS-012`, `INGEST-017`
+- Goal: документация должна подстраиваться под тип репозитория, а не всегда использовать один `developer_handbook`.
+- Tasks:
+- классифицировать snapshot как `library`, `cli_tool`, `backend_service`, `frontend_app`, `monorepo_web_app`, `mixed`;
+- использовать признаки из `project_model`, `package_graph`, `config_inventory`: workspace units, modules, package managers, HTTP surface, frontend manifests, CLI/library signatures;
+- добавить template selection для documentation run, если пользователь не указал template вручную;
+- сделать `go_library_handbook` для Cobra-like repos;
+- сделать `monorepo_web_app_handbook` для image-board-like repos;
+- сохранить выбранный template и classification summary в run summary/manifest.
+- Acceptance:
+- `spf13/cobra` получает library-oriented sections: public API, command lifecycle, flags/args, completions, doc generation, testing;
+- `image-board` получает monorepo-oriented sections: service map, local development, request flows, data model, API surface, frontend, deployment;
+- generic `developer_handbook` остаётся fallback, а не основной путь для всех репозиториев.
+
+### DOCS-017 — Разделить документацию на intent-based artifacts
+- Priority: `P1`
+- Depends on: `DOCS-016`
+- Goal: генерировать не один большой handbook, а набор полезных документов под разные сценарии чтения.
+- Tasks:
+- добавить `repository_brief.md`: краткое понимание проекта за 1-2 страницы;
+- добавить `onboarding_guide.md`: как поднять, проверить и начать менять проект;
+- добавить `architecture_map.md`: структура, компоненты, зависимости, ключевые flows;
+- добавить reference artifacts: API routes, env/config, commands, package/service index;
+- вынести commit-derived выводы в отдельный `change_report.md`;
+- обновить manifest/schema так, чтобы documents и sections были разными уровнями.
+- Acceptance:
+- основной документ не перегружен inventory/reference деталями;
+- change history не загрязняет текущую архитектурную документацию;
+- пользователь может открыть короткий brief или глубокий reference в зависимости от задачи.
+
+### DOCS-018 — Нормализовать commit evidence перед LLM
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-015`
+- Goal: не допускать склеивания SHA/message/status соседних коммитов и не выводить текущее состояние проекта только из истории.
+- Tasks:
+- строить `change_events` с атомарными facts: `sha`, `short_sha`, `subject`, `path`, `status`, `change_type`, `current_file_present`;
+- явно разделять commit facts и current snapshot facts;
+- запрещать в prompt делать утверждения о текущем наличии/отсутствии файла только по историческому `deleted`;
+- для merge-heavy repos группировать merge commits и original commits отдельно;
+- добавить regression fixture на кейс image-board `docker-compose.yml`: `cbba05f4...` удалил файл, `733280ed...` добавил файл с message `fucking docker compose`;
+- использовать commit evidence в main docs только как "recent changes", а detailed risks переносить в `change_report`.
+- Acceptance:
+- модель не смешивает SHA одного коммита с message другого;
+- утверждение о наличии `docker-compose.yml` проверяется по текущему file inventory/project model;
+- commit-derived known gaps становятся осторожными и проверяемыми.
+- Notes:
+- commit evidence теперь строится как `change_events` с атомарными `sha`/`subject`/`path`/`status`/`change_type`/`current_file_state`;
+- prompt explicitly запрещает делать вывод о текущем отсутствии файла только по historical `deleted`;
+- добавлен regression test на image-board `docker-compose.yml`, где SHA, subject и статус не должны склеиваться между соседними коммитами.
+
 ## Epic GATEWAY — Public API Integration
 
 ### GATEWAY-001 — Подключить новые маршруты в EdgeGateway

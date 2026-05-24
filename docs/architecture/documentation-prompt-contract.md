@@ -1,8 +1,9 @@
 # Documentation Evidence Packs And Prompt Contract
 
-`DOCS-009` and `DOCS-011` define the handoff between repository evidence and
-LLM-backed section generation. The pipeline must send bounded, auditable inputs
-to the model instead of raw analysis artifacts.
+`DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015` and `DOCS-018` define the handoff
+between repository evidence and LLM-backed section generation. The pipeline must
+send bounded, auditable and rendered inputs to the model instead of raw analysis
+artifacts.
 
 ## Evidence Pack
 
@@ -16,9 +17,10 @@ Each documentation section receives one evidence pack:
 - diagnostics: `omitted_sources`, `truncated_sources`, `estimated_tokens`;
 - optional `retrieval_query` and `retrieval_error`.
 
-The pack is built from compact structured evidence plus retrieval chunks. The
-default budget is intentionally spacious for the selected DeepSeek V4 Flash
-runtime:
+The raw pack is built from compact structured evidence plus retrieval chunks.
+It remains a debug artifact; prompt contracts use the rendered pack described
+below. The default budget is intentionally spacious for the selected DeepSeek V4
+Flash runtime:
 
 ```env
 DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS=120000
@@ -32,14 +34,35 @@ The documentation worker writes a debug/verification artifact:
 repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/evidence_packs.schema-v1.json
 ```
 
+## Rendered Evidence Pack
+
+Each raw pack is converted to a rendered pack before prompt construction:
+
+- structured artifacts are rendered as Markdown lists/tables rather than nested
+  JSON arrays;
+- project/package/config/commit fields use dedicated renderers;
+- retrieval chunks keep concise excerpts with file/symbol/line provenance;
+- generated Swagger/codegen retrieval chunks are filtered from generic handbook
+  sections by default;
+- commit history is normalized into atomic `change_events` with `sha`,
+  `short_sha`, `subject`, `path`, `status`, `change_type` and
+  `current_file_state`.
+
+The rendered pack is also published for debugging:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/rendered_evidence_packs.schema-v1.json
+```
+
 ## Prompt Contract
 
 Each section prompt contract contains:
 
 - `system` message: the model is a source-grounded documentation generator;
-- `developer` message: output language, markdown shape, citation and unknown
-  evidence rules;
-- `user` message: section plan, allowed source ids and the evidence pack JSON.
+- `developer` message: output language, body-only markdown shape, citation,
+  commit-history and unknown evidence rules;
+- `user` message: section plan, allowed source ids and rendered evidence
+  sources.
 
 Key rules:
 
@@ -47,7 +70,20 @@ Key rules:
   dependencies or configuration with provided source ids;
 - use only source ids listed in the evidence pack;
 - state that evidence is missing instead of guessing;
-- generate only the requested section.
+- generate only the requested section body, without a heading or sources
+  appendix;
+- do not infer current file absence from a historical `deleted` event unless
+  `current_file_state` is `absent`.
+
+The LLM output is post-processed after generation:
+
+- leading model-generated headings are stripped and the canonical section
+  heading is added by the pipeline;
+- a section-local `### Sources` appendix maps `S1`, `S2`, ... to artifact/file
+  provenance;
+- obvious hygiene issues (`finish_reason=length`, unclosed fences, glued
+  repeated words and repeated phrases) are recorded as warnings in manifest/run
+  summary.
 
 The documentation worker writes the prompt contract manifest:
 

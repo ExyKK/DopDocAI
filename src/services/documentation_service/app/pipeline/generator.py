@@ -42,6 +42,7 @@ class DeveloperHandbookGenerator:
         section_artifacts: list[dict[str, Any]],
         documentation_artifact: dict[str, Any],
         evidence_pack_artifact: dict[str, Any] | None = None,
+        rendered_evidence_pack_artifact: dict[str, Any] | None = None,
         prompt_contract_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class DeveloperHandbookGenerator:
             ],
             "documentation": documentation_artifact,
             "evidence_pack_manifest": evidence_pack_artifact,
+            "rendered_evidence_pack_manifest": rendered_evidence_pack_artifact,
             "prompt_contract_manifest": prompt_contract_artifact,
         }
 

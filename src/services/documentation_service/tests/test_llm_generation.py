@@ -10,6 +10,7 @@ from app.pipeline.evidence import SectionEvidence
 from app.pipeline.evidence_pack import EvidencePackBudget, build_evidence_pack
 from app.pipeline.llm_generation import LlmSectionGenerator
 from app.pipeline.prompt_contract import build_section_prompt_contract
+from app.pipeline.rendered_evidence import build_rendered_evidence_pack
 
 
 def test_stub_provider_generates_markdown_from_prompt_contract() -> None:
@@ -20,9 +21,39 @@ def test_stub_provider_generates_markdown_from_prompt_contract() -> None:
 
     assert generated.section.section_key == "entry_points"
     assert generated.section.content_markdown.startswith("## Entry Points")
+    assert "### Sources" in generated.section.content_markdown
     assert generated.section.generation is not None
     assert generated.section.generation["provider"] == "stub"
     assert generated.section.generation["model"] == "stub"
+    assert generated.section.generation["quality_status"] == "ok"
+
+
+def test_section_generator_strips_model_heading_and_records_warning() -> None:
+    section = _section_with_pack()
+    contract = build_section_prompt_contract(section, output_language="ru")
+
+    class HeadingProvider(StubLlmCompletionProvider):
+        def generate(self, messages, *, metadata=None):
+            result = super().generate(messages, metadata=metadata)
+            return result.__class__(
+                content="## Лишний заголовок\n\nТело секции [S1].",
+                provider=result.provider,
+                model=result.model,
+                finish_reason=result.finish_reason,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+                latency_ms=result.latency_ms,
+                response_id=result.response_id,
+            )
+
+    generated = LlmSectionGenerator(HeadingProvider()).generate_section(contract)
+
+    assert generated.section.content_markdown.startswith("## Entry Points\n\nТело секции")
+    assert "## Лишний заголовок" not in generated.section.content_markdown
+    assert generated.section.generation is not None
+    assert generated.section.generation["warnings"][0]["code"] == "leading_heading_removed"
+    assert generated.section.generation["quality_status"] == "ok"
 
 
 def test_openai_compatible_provider_sends_openrouter_headers_and_provider_options(
@@ -137,4 +168,5 @@ def _section_with_pack() -> SectionEvidence:
         sources=section.sources,
         budget=EvidencePackBudget(),
     )
+    section.rendered_evidence_pack = build_rendered_evidence_pack(section.evidence_pack)
     return section
