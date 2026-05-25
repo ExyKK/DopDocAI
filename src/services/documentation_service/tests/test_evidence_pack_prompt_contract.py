@@ -212,6 +212,29 @@ def test_evidence_planner_filters_generated_retrieval_for_generic_sections() -> 
     assert "backend/service/docs/docs.go" not in json.dumps(rendered, ensure_ascii=False)
 
 
+def test_go_library_runtime_sections_filter_consumer_docs_from_retrieval() -> None:
+    templates = (
+        SectionTemplate(
+            key="command_lifecycle",
+            title="Command Lifecycle",
+            retrieval_query="cobra command Execute lifecycle",
+            retrieval_languages=("go",),
+            retrieval_source_scopes=("runtime",),
+            retrieval_include_tests=False,
+        ),
+    )
+    retrieval = _GoLibraryRetrievalClient()
+    planner = EvidencePlanner(retrieval)
+
+    sections = planner.plan(snapshot_id="snapshot-1", templates=templates, artifacts={})
+
+    assert retrieval.calls[0]["filters"]["languages"] == ["go"]
+    assert retrieval.calls[0]["filters"]["source_scopes"] == ["runtime"]
+    assert retrieval.calls[0]["include_tests"] is False
+    matches = sections[0].evidence["retrieval_matches"]
+    assert [match["file_path"] for match in matches] == ["command.go"]
+
+
 def test_commit_evidence_keeps_sha_subject_status_boundaries() -> None:
     planner = EvidencePlanner(None)
     templates = (
@@ -325,7 +348,7 @@ def test_overview_does_not_receive_commit_history_evidence() -> None:
 
 
 class _FakeRetrievalClient:
-    def search(self, snapshot_id: str, query: str) -> list[RetrievedSource]:
+    def search(self, snapshot_id: str, query: str, **kwargs) -> list[RetrievedSource]:
         return [
             RetrievedSource(
                 chunk_id="generated-1",
@@ -349,6 +372,40 @@ class _FakeRetrievalClient:
                 start_line=1,
                 end_line=3,
                 symbol_name="main",
+                source_kind="go_symbol",
+            ),
+        ]
+
+
+class _GoLibraryRetrievalClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def search(self, snapshot_id: str, query: str, **kwargs) -> list[RetrievedSource]:
+        self.calls.append(kwargs)
+        return [
+            RetrievedSource(
+                chunk_id="docs-1",
+                score=0.95,
+                text="Consumer app creates a main.go and calls cmd.Execute().",
+                file_path="site/content/user_guide.md",
+                language="markdown",
+                source_scope="docs",
+                start_line=10,
+                end_line=20,
+                symbol_name="user_guide.md",
+                source_kind="file_slice",
+            ),
+            RetrievedSource(
+                chunk_id="runtime-1",
+                score=0.91,
+                text="func (c *Command) Execute() error { return c.ExecuteC() }",
+                file_path="command.go",
+                language="go",
+                source_scope="runtime",
+                start_line=1080,
+                end_line=1100,
+                symbol_name="cobra.Command.Execute",
                 source_kind="go_symbol",
             ),
         ]

@@ -26,6 +26,8 @@ class EvidencePackSource:
     score: float | None = None
     language: str | None = None
     source_scope: str | None = None
+    workspace_unit_id: str | None = None
+    package_id: str | None = None
     truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +43,8 @@ class EvidencePackSource:
             "score": self.score,
             "language": self.language,
             "source_scope": self.source_scope,
+            "workspace_unit_id": self.workspace_unit_id,
+            "package_id": self.package_id,
             "selection_reason": self.selection_reason,
             "estimated_tokens": self.estimated_tokens,
             "truncated": self.truncated,
@@ -59,6 +63,8 @@ class OmittedEvidenceSource:
     chunk_id: str | None = None
     language: str | None = None
     source_scope: str | None = None
+    workspace_unit_id: str | None = None
+    package_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +74,8 @@ class OmittedEvidenceSource:
             "chunk_id": self.chunk_id,
             "language": self.language,
             "source_scope": self.source_scope,
+            "workspace_unit_id": self.workspace_unit_id,
+            "package_id": self.package_id,
             "selection_reason": self.selection_reason,
             "omitted_reason": self.omitted_reason,
             "estimated_tokens": self.estimated_tokens,
@@ -259,6 +267,8 @@ def _retrieval_candidates(
                 "score": match.get("score"),
                 "language": _optional_str(match.get("language")),
                 "source_scope": _optional_str(match.get("source_scope")),
+                "workspace_unit_id": _optional_str(match.get("workspace_unit_id")),
+                "package_id": _optional_str(match.get("package_id")),
             }
         )
 
@@ -291,6 +301,9 @@ def _pack_source(
         score=_float_or_none(candidate.get("score")) or _float_or_none(source.get("score")),
         language=_optional_str(candidate.get("language")) or _optional_str(source.get("language")),
         source_scope=_optional_str(candidate.get("source_scope")) or _optional_str(source.get("source_scope")),
+        workspace_unit_id=_optional_str(candidate.get("workspace_unit_id"))
+        or _optional_str(source.get("workspace_unit_id")),
+        package_id=_optional_str(candidate.get("package_id")) or _optional_str(source.get("package_id")),
         selection_reason=_optional_str(candidate.get("selection_reason")) or "selected evidence",
         estimated_tokens=estimated,
         truncated=truncated,
@@ -307,6 +320,8 @@ def _omit(candidate: dict[str, Any], reason: str) -> OmittedEvidenceSource:
         chunk_id=_optional_str(candidate.get("chunk_id")),
         language=_optional_str(candidate.get("language")),
         source_scope=_optional_str(candidate.get("source_scope")),
+        workspace_unit_id=_optional_str(candidate.get("workspace_unit_id")),
+        package_id=_optional_str(candidate.get("package_id")),
         selection_reason=_optional_str(candidate.get("selection_reason")) or "candidate evidence",
         omitted_reason=reason,
         estimated_tokens=estimate_tokens(content),

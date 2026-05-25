@@ -37,6 +37,8 @@ class VerificationFinding:
     repairable: bool = False
     suggested_fix: str | None = None
     evidence_needed: str | None = None
+    repair_strategy: str | None = None
+    retrieval_hints: list[str] = field(default_factory=list)
     origin: str = "deterministic"
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,6 +54,8 @@ class VerificationFinding:
             "repairable": self.repairable,
             "suggested_fix": self.suggested_fix,
             "evidence_needed": self.evidence_needed,
+            "repair_strategy": self.repair_strategy,
+            "retrieval_hints": self.retrieval_hints,
             "origin": self.origin,
         }
 
@@ -360,7 +364,7 @@ def _deterministic_findings(
     for section in sections:
         contract = contracts.get(section.section_key)
         allowed_source_ids = set(contract.source_ids if contract else [])
-        findings.extend(_section_findings(section, allowed_source_ids))
+        findings.extend(_section_findings(section, allowed_source_ids, contract))
     findings.extend(_document_findings(documents))
     return findings
 
@@ -403,6 +407,7 @@ def _manifest_findings(manifest: dict[str, Any]) -> list[VerificationFinding]:
 def _section_findings(
     section: GeneratedSection,
     allowed_source_ids: set[str],
+    contract: SectionPromptContract | None,
 ) -> list[VerificationFinding]:
     findings: list[VerificationFinding] = []
     markdown = section.content_markdown or ""
@@ -490,6 +495,8 @@ def _section_findings(
             )
         )
 
+    findings.extend(_go_library_consumer_scope_findings(section, body, contract))
+
     generation = section.generation or {}
     if generation.get("finish_reason") == "length":
         findings.append(
@@ -540,6 +547,7 @@ def _section_judge_payload(
         "allowed_source_ids": contract.source_ids,
         "source_index": contract.source_index,
         "generated_markdown": _truncate(section.content_markdown, 16000),
+        "extracted_claims": _extract_claims(section.content_markdown),
         "rendered_evidence_pack": prompt_payload.get("evidence_pack", {}),
         "checks": [
             "Every factual technical claim should be supported by cited evidence.",
@@ -547,6 +555,7 @@ def _section_judge_payload(
             "The section should satisfy section_spec.must_cover when evidence exists.",
             "The section should avoid section_spec.avoid and neighboring document intents.",
             "The section should be useful, specific and not just an inventory dump.",
+            "For Go library/CLI repositories, consumer documentation examples must not be treated as files, entrypoints or wiring that exists inside the repository unless runtime evidence confirms it.",
         ],
     }
 
@@ -572,6 +581,8 @@ def _judge_messages(payload: dict[str, Any]) -> list[LlmMessage]:
                 "repairable": True,
                 "suggested_fix": "specific correction",
                 "evidence_needed": "optional missing evidence",
+                "repair_strategy": "rewrite_existing|expand_evidence|remove_claim",
+                "retrieval_hints": ["optional short search terms"],
             }
         ],
     }
@@ -590,6 +601,8 @@ def _judge_messages(payload: dict[str, Any]) -> list[LlmMessage]:
                 "Validate groundedness, usefulness, coverage and scope. "
                 "Treat unsupported or contradicted technical claims about files, APIs, commands, "
                 "dependencies or configuration as error findings. "
+                "Use repair_strategy=expand_evidence only when a missing fact could be resolved by targeted repository retrieval. "
+                "Use repair_strategy=remove_claim for contradicted or wrong-scope claims. "
                 "Treat weak usefulness, duplication and missing coverage as warning findings. "
                 "Use this exact JSON shape: "
                 f"{json.dumps(schema, ensure_ascii=False)}"
@@ -679,6 +692,12 @@ def _findings_from_judge(
                 repairable=bool(item.get("repairable", severity == "error")),
                 suggested_fix=_optional_str(item.get("suggested_fix")),
                 evidence_needed=_optional_str(item.get("evidence_needed")),
+                repair_strategy=_enum(
+                    item.get("repair_strategy"),
+                    {"rewrite_existing", "expand_evidence", "remove_claim"},
+                    default="rewrite_existing",
+                ),
+                retrieval_hints=_string_list(item.get("retrieval_hints"), limit=5),
                 origin="llm_judge",
             )
         )
@@ -733,6 +752,179 @@ def _body_without_sources(markdown: str) -> str:
     return (markdown or "").split("### Sources", 1)[0].strip()
 
 
+def _extract_claims(markdown: str, *, limit: int = 32) -> list[dict[str, Any]]:
+    body = _body_without_sources(markdown)
+    claims: list[dict[str, Any]] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip(" -*\t")
+        if not line or line.startswith("#") or len(line) < 24:
+            continue
+        for sentence in _sentences(line):
+            if not _looks_technical_claim(sentence):
+                continue
+            claims.append(
+                {
+                    "text": _truncate(sentence, 600),
+                    "source_ids": sorted(_citations(sentence)),
+                    "kind": _claim_kind(sentence),
+                }
+            )
+            if len(claims) >= limit:
+                return claims
+    return claims
+
+
+def _sentences(line: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", line).strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?。])\s+", normalized)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _looks_technical_claim(text: str) -> bool:
+    lowered = text.lower()
+    markers = (
+        "`",
+        ".go",
+        ".ts",
+        ".json",
+        ".yaml",
+        ".yml",
+        "http",
+        "api",
+        "command",
+        "config",
+        "env",
+        "package",
+        "module",
+        "function",
+        "method",
+        "struct",
+        "docker",
+        "команд",
+        "конфиг",
+        "пакет",
+        "модул",
+        "файл",
+        "api",
+    )
+    return any(marker in lowered for marker in markers) or bool(_citations(text))
+
+
+def _claim_kind(text: str) -> str:
+    lowered = text.lower()
+    if "config" in lowered or "env" in lowered or "конфиг" in lowered:
+        return "configuration"
+    if "command" in lowered or "cmd." in lowered or "команд" in lowered:
+        return "command"
+    if "api" in lowered or "http" in lowered:
+        return "api"
+    if ".go" in lowered or "package" in lowered or "пакет" in lowered:
+        return "code"
+    return "technical"
+
+
+def _go_library_consumer_scope_findings(
+    section: GeneratedSection,
+    body: str,
+    contract: SectionPromptContract | None,
+) -> list[VerificationFinding]:
+    if contract is None or contract.template_kind != "go_library_handbook":
+        return []
+    if section.section_key not in {"overview", "public_api", "command_lifecycle", "build_run_test"}:
+        return []
+
+    consumer_source_ids = _consumer_example_source_ids(contract.source_index)
+    findings: list[VerificationFinding] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if "main.go" not in lowered and "cmd.execute" not in lowered:
+            continue
+        if _line_distinguishes_consumer_example(lowered):
+            continue
+        if not _line_claims_repository_scope(lowered):
+            continue
+        cited = sorted(_citations(stripped) & consumer_source_ids)
+        findings.append(
+            VerificationFinding(
+                check_id="go_library_consumer_example_wrong_scope",
+                severity="warning",
+                category="wrong_scope",
+                section_key=section.section_key,
+                message=(
+                    "Go library section appears to present a consumer example "
+                    "as an entrypoint or implementation file in the repository."
+                ),
+                claim=_truncate(stripped, 600),
+                source_ids=cited,
+                repairable=True,
+                suggested_fix=(
+                    "Rewrite this as downstream usage example or remove the claim unless runtime evidence confirms it."
+                ),
+                repair_strategy="remove_claim",
+                origin="deterministic",
+            )
+        )
+    return findings
+
+
+def _consumer_example_source_ids(source_index: list[dict[str, Any]]) -> set[str]:
+    result: set[str] = set()
+    for source in source_index:
+        path = str(source.get("file_path") or "").lower()
+        scope = str(source.get("source_scope") or "").lower()
+        title = str(source.get("title") or "").lower()
+        if (
+            scope in {"docs", "documentation"}
+            or path.startswith("site/content/")
+            or "/examples/" in path
+            or "user_guide" in path
+            or "example" in title
+        ):
+            source_id = source.get("source_id")
+            if isinstance(source_id, str) and source_id:
+                result.add(source_id)
+    return result
+
+
+def _line_distinguishes_consumer_example(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in (
+            "example",
+            "consumer",
+            "downstream",
+            "usage",
+            "пример",
+            "потребител",
+            "использован",
+            "приложени",
+        )
+    )
+
+
+def _line_claims_repository_scope(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in (
+            "repository",
+            "repo",
+            "project",
+            "codebase",
+            "репозитор",
+            "проект",
+            "кодовая база",
+            "entrypoint",
+            "точк",
+            "вход",
+            "содержит",
+            "contains",
+        )
+    )
+
+
 def _looks_like_raw_json_dump(markdown: str) -> bool:
     text = markdown.strip()
     if "```json" in text.lower():
@@ -758,6 +950,21 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _string_list(value: Any, *, limit: int) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _optional_str(item)
+        if text:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def _truncate(value: str, max_length: int) -> str:

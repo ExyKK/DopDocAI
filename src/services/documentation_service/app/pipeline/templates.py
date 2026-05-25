@@ -17,6 +17,10 @@ class SectionTemplate:
     avoid: tuple[str, ...] = ()
     output_style: str | None = None
     document_keys: tuple[str, ...] = ()
+    retrieval_languages: tuple[str, ...] = ()
+    retrieval_source_scopes: tuple[str, ...] = ()
+    retrieval_chunk_kinds: tuple[str, ...] = ()
+    retrieval_include_tests: bool | None = None
 
     def to_prompt_dict(self) -> dict[str, object]:
         return {
@@ -27,6 +31,12 @@ class SectionTemplate:
             "avoid": list(self.avoid),
             "output_style": self.output_style,
             "document_keys": list(self.document_keys),
+            "retrieval_scope": {
+                "languages": list(self.retrieval_languages),
+                "source_scopes": list(self.retrieval_source_scopes),
+                "chunk_kinds": list(self.retrieval_chunk_kinds),
+                "include_tests": self.retrieval_include_tests,
+            },
         }
 
 
@@ -166,9 +176,16 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         "Go repository overview public purpose packages module responsibilities",
         purpose="Orient a Go library or CLI user to what the repository provides today.",
         must_cover=("library purpose", "main package/module", "public surface at a high level"),
-        avoid=("full API reference", "commit-derived architecture claims"),
+        avoid=(
+            "full API reference",
+            "commit-derived architecture claims",
+            "treating downstream usage examples as files or entrypoints in this repository",
+        ),
         output_style="Keep it short enough to serve as a repository brief.",
         document_keys=("repository_brief",),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "public_api",
@@ -176,8 +193,15 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         "exported Go API public types functions methods command package usage",
         purpose="Describe the exported Go API and how a consumer is expected to use it.",
         must_cover=("exported types/functions", "primary package responsibilities", "example usage patterns when evidenced"),
-        avoid=("private helper inventory", "APIs not present in evidence"),
+        avoid=(
+            "private helper inventory",
+            "APIs not present in evidence",
+            "claiming that downstream application examples are repository implementation files",
+        ),
         document_keys=("architecture_map", "api_reference"),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "command_lifecycle",
@@ -185,8 +209,14 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         "Go CLI command lifecycle execute run subcommands args validation cobra",
         purpose="Explain command execution flow for Go CLI-oriented libraries.",
         must_cover=("command construction", "execute/run lifecycle", "subcommands and validation hooks"),
-        avoid=("assuming Cobra unless evidence shows Cobra-specific names",),
+        avoid=(
+            "assuming Cobra unless evidence shows Cobra-specific names",
+            "presenting consumer `main.go` or `cmd.Execute()` examples as entry points inside the library repository",
+        ),
         document_keys=("architecture_map", "commands_reference"),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "flags_and_args",
@@ -196,6 +226,9 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         must_cover=("flag definitions", "argument validation", "option/annotation mechanisms"),
         avoid=("listing every test-only flag as runtime API",),
         document_keys=("commands_reference", "configuration_reference"),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "completions",
@@ -205,6 +238,9 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         must_cover=("supported shells", "generation flow", "custom completion hooks when present"),
         avoid=("treating generated completion output as source design",),
         document_keys=("commands_reference",),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "doc_generation",
@@ -214,6 +250,7 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         must_cover=("generated formats", "entry points for docs generation", "examples/tests that define behavior"),
         avoid=("marketing copy",),
         document_keys=("commands_reference",),
+        retrieval_languages=("go",),
     ),
     SectionTemplate(
         "testing",
@@ -223,6 +260,9 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         must_cover=("test focus areas", "test helpers", "commands to run tests"),
         avoid=("turning tests into runtime API claims"),
         document_keys=("onboarding_guide",),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime", "test"),
+        retrieval_include_tests=True,
     ),
     SectionTemplate(
         "package_map",
@@ -232,6 +272,9 @@ GO_LIBRARY_HANDBOOK_SECTIONS: tuple[SectionTemplate, ...] = (
         must_cover=("module path", "important packages", "dependency relationships"),
         avoid=("unbounded import graph dumps",),
         document_keys=("architecture_map", "package_service_index"),
+        retrieval_languages=("go",),
+        retrieval_source_scopes=("runtime",),
+        retrieval_include_tests=False,
     ),
     SectionTemplate(
         "build_run_test",

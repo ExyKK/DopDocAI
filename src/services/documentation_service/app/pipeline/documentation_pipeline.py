@@ -28,6 +28,7 @@ from app.pipeline.rendered_evidence import (
     build_rendered_evidence_pack_manifest,
 )
 from app.pipeline.repair import RepairPlan, build_repair_attempts_manifest, build_repair_plan
+from app.pipeline.repair_evidence import build_repair_evidence_delta
 from app.pipeline.templates import get_section_templates, select_documentation_template
 from app.pipeline.verification import (
     DocumentationVerificationError,
@@ -79,6 +80,7 @@ class DocumentationGenerationPipeline:
     ):
         self._repository_service = repository_service
         self._storage = storage
+        self._retrieval = retrieval
         self._planner = EvidencePlanner(retrieval, budget=evidence_pack_budget)
         self._generator = DeveloperHandbookGenerator()
         self._section_generator = LlmSectionGenerator(
@@ -290,6 +292,7 @@ class DocumentationGenerationPipeline:
         verification_reports: list[VerificationReport] = []
         repair_plans: list[RepairPlan] = []
         repair_attempts: list[dict[str, Any]] = []
+        repair_evidence_delta_artifacts: list[dict[str, Any]] = []
         contract_by_section = {contract.section_key: contract for contract in prompt_contracts}
 
         for repair_round in range(self._max_repair_rounds + 1):
@@ -350,6 +353,41 @@ class DocumentationGenerationPipeline:
             if not plan.has_repairs() or plan.unresolved_findings:
                 break
 
+            repair_evidence_delta = build_repair_evidence_delta(
+                documentation_run_id=run.id,
+                repository_id=run.repository_id,
+                snapshot_id=run.snapshot_id,
+                template_kind=effective_template_kind,
+                repair_plan=plan,
+                contracts_by_section=contract_by_section,
+                retrieval=self._retrieval,
+            )
+            delta_artifact = self._publish_json(
+                run=run,
+                artifact_kind="repair_evidence_delta",
+                section_key=None,
+                key=(
+                    f"{_attempt_prefix(run)}/repair_evidence_delta."
+                    f"round-{plan.repair_round}.schema-v1.json"
+                ),
+                payload=repair_evidence_delta.manifest,
+            )
+            repair_evidence_delta_artifacts.append(delta_artifact)
+            if repair_evidence_delta.updated_contracts:
+                contract_by_section.update(repair_evidence_delta.updated_contracts)
+                prompt_contracts = _replace_prompt_contracts(
+                    prompt_contracts,
+                    repair_evidence_delta.updated_contracts,
+                )
+            self._record_trace(
+                "repair_evidence_delta_built",
+                stage="repairing_documentation",
+                repair_round=plan.repair_round,
+                sections_total=repair_evidence_delta.manifest["summary"]["sections_total"],
+                sources_added_total=repair_evidence_delta.manifest["summary"]["sources_added_total"],
+                queries_total=repair_evidence_delta.manifest["summary"]["queries_total"],
+            )
+
             report_progress(
                 "repairing_documentation",
                 88,
@@ -376,6 +414,9 @@ class DocumentationGenerationPipeline:
                         current_markdown=current_section.content_markdown,
                         findings=[finding.to_dict() for finding in section_plan.findings],
                         repair_round=plan.repair_round,
+                        repair_evidence_delta=repair_evidence_delta.prompt_deltas.get(
+                            section_plan.section_key
+                        ),
                     ).section
                 except Exception:
                     self._set_failure_context(
@@ -414,6 +455,17 @@ class DocumentationGenerationPipeline:
                         "findings": [finding.to_dict() for finding in section_plan.findings],
                         "artifact": attempt_artifact,
                         "generation": repaired.generation,
+                        "repair_evidence_delta": {
+                            "source_ids": [
+                                source.get("source_id")
+                                for source in (
+                                    repair_evidence_delta.prompt_deltas.get(section_plan.section_key)
+                                    or {}
+                                ).get("sources", [])
+                                if isinstance(source, dict)
+                            ],
+                            "artifact": delta_artifact,
+                        },
                     }
                 )
                 _replace_section(generated_sections, repaired)
@@ -461,6 +513,7 @@ class DocumentationGenerationPipeline:
                 attempts=repair_attempts,
                 plans=repair_plans,
                 final_report=final_report,
+                evidence_delta_artifacts=repair_evidence_delta_artifacts,
             )
             repair_attempts_artifact = self._publish_json(
                 run=run,
@@ -611,6 +664,7 @@ class DocumentationGenerationPipeline:
                 "repair_summary": (repair_attempts_manifest or {}).get("summary"),
                 "repair_plan_artifact": repair_plan_artifact,
                 "repair_attempts_artifact": repair_attempts_artifact,
+                "repair_evidence_delta_artifacts": repair_evidence_delta_artifacts,
                 "pipeline_trace_artifact": pipeline_trace_artifact,
                 "draft_manifest_artifact": draft_manifest_artifact,
                 "evidence_pack_artifact": evidence_pack_artifact,
@@ -1268,6 +1322,16 @@ def _attach_prompt_contracts(
         section.prompt_contract = contract.to_dict()
         contracts.append(contract)
     return contracts
+
+
+def _replace_prompt_contracts(
+    contracts: list[SectionPromptContract],
+    updates: dict[str, SectionPromptContract],
+) -> list[SectionPromptContract]:
+    return [
+        updates.get(contract.section_key, contract)
+        for contract in contracts
+    ]
 
 
 def _evidence_packs(sections: list[SectionEvidence]) -> list[EvidencePack]:

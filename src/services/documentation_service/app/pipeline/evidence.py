@@ -118,6 +118,8 @@ class _SectionBuilder:
                 "score": source.score,
                 "language": source.language,
                 "source_scope": source.source_scope,
+                "workspace_unit_id": source.workspace_unit_id,
+                "package_id": source.package_id,
                 "note": f"retrieval: {query}",
             }
         )
@@ -329,7 +331,12 @@ def _from_commit_log(
 
 def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient) -> None:
     try:
-        matches = retrieval.search(builder.snapshot_id, builder.template.retrieval_query)
+        matches = retrieval.search(
+            builder.snapshot_id,
+            builder.template.retrieval_query,
+            filters=_retrieval_filters(builder.template),
+            include_tests=builder.template.retrieval_include_tests,
+        )
     except RetrievalClientError as exc:
         builder.evidence["retrieval_error"] = str(exc)
         return
@@ -350,12 +357,22 @@ def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient
             "source_kind": match.source_kind,
             "language": match.language,
             "source_scope": match.source_scope,
+            "workspace_unit_id": match.workspace_unit_id,
+            "package_id": match.package_id,
             "text": match.text,
         }
         for match in filtered_matches[:8]
     ]
     for match in filtered_matches:
         builder.add_retrieved_source(match, builder.template.retrieval_query)
+
+
+def _retrieval_filters(template: SectionTemplate) -> dict[str, list[str]]:
+    return {
+        "languages": list(template.retrieval_languages),
+        "source_scopes": list(template.retrieval_source_scopes),
+        "chunk_kinds": list(template.retrieval_chunk_kinds),
+    }
 
 
 def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any]]) -> bool:
@@ -545,6 +562,11 @@ def _allow_retrieval_match(section_key: str, match: RetrievedSource) -> bool:
         return False
     if match.file_path and _looks_generated_source_path(match.file_path):
         return False
+    if (
+        section_key in {"public_api", "command_lifecycle", "flags_and_args", "completions", "package_map"}
+        and _looks_consumer_doc_source(match)
+    ):
+        return False
     return True
 
 
@@ -553,6 +575,17 @@ def _looks_generated_source_path(path: str) -> bool:
     if normalized.endswith("/docs/docs.go"):
         return True
     return any(part in {".swagger-codegen", "generated"} for part in normalized.split("/"))
+
+
+def _looks_consumer_doc_source(match: RetrievedSource) -> bool:
+    path = _normalize_path(match.file_path or "").lower()
+    scope = (match.source_scope or "").lower()
+    return (
+        scope in {"docs", "documentation"}
+        or path.startswith("site/content/")
+        or "/examples/" in path
+        or "user_guide" in path
+    )
 
 
 def _compact(value: Any, limit: int = 12) -> Any:

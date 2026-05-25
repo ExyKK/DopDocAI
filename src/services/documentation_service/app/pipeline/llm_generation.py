@@ -86,6 +86,7 @@ class LlmSectionGenerator:
         current_markdown: str,
         findings: list[dict[str, Any]],
         repair_round: int,
+        repair_evidence_delta: dict[str, Any] | None = None,
     ) -> SectionGenerationOutput:
         outcome = call_llm_with_retry(
             self._provider,
@@ -94,6 +95,7 @@ class LlmSectionGenerator:
                 current_markdown=current_markdown,
                 findings=findings,
                 repair_round=repair_round,
+                repair_evidence_delta=repair_evidence_delta,
             ),
             metadata={
                 "task": "documentation_section_repair",
@@ -102,6 +104,9 @@ class LlmSectionGenerator:
                 "repair_round": str(repair_round),
                 "source_count": str(len(contract.source_ids)),
                 "estimated_input_tokens": str(contract.estimated_input_tokens),
+                "repair_delta_sources": str(
+                    len((repair_evidence_delta or {}).get("sources") or [])
+                ),
             },
             max_attempts=self._max_attempts,
             retry_delay_s=self._retry_delay_s,
@@ -119,6 +124,7 @@ class LlmSectionGenerator:
             "prompt_version": contract.schema_version,
             "repair_round": repair_round,
             "repair_findings_total": len(findings),
+            "repair_delta_sources_total": len((repair_evidence_delta or {}).get("sources") or []),
             "llm_attempts_total": outcome.attempts_total,
             "llm_retry_errors": outcome.retry_errors,
         }
@@ -150,6 +156,7 @@ def _repair_messages(
     current_markdown: str,
     findings: list[dict[str, Any]],
     repair_round: int,
+    repair_evidence_delta: dict[str, Any] | None,
 ) -> list[LlmMessage]:
     payload = {
         "task": "Repair one generated documentation section.",
@@ -162,6 +169,7 @@ def _repair_messages(
         "section_spec": contract.section_spec,
         "allowed_source_ids": contract.source_ids,
         "source_index": contract.source_index,
+        "repair_evidence_delta": repair_evidence_delta,
         "current_markdown": current_markdown,
         "verification_findings": findings,
         "original_prompt_payload": contract.messages[-1].content,
@@ -182,6 +190,8 @@ def _repair_messages(
                     "Fix every verification finding that is repairable.",
                     "Remove unsupported or contradicted claims instead of trying to justify them.",
                     "Do not add facts, files, commands, APIs, dependencies or configuration outside the provided evidence.",
+                    "Use repair_evidence_delta sources only when they directly support the missing fact; otherwise remove or mark the claim as unknown/partial.",
+                    "Never use targeted retrieval to justify contradicted or wrong-scope claims.",
                     "Use only allowed source ids in citations.",
                     "If evidence is missing, state that explicitly and keep the section partial.",
                     "Keep the section focused on section_spec and avoid neighboring document intents.",

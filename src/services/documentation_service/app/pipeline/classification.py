@@ -50,11 +50,21 @@ def classify_repository(artifacts: dict[str, Any]) -> RepositoryClassification:
     api_specs_total = _int(config_summary.get("api_specs_total"))
     go_modules_total = _int(package_summary.get("modules_total"), len(modules))
     packages_total = _int(package_summary.get("packages_total"), len(packages))
+    root_go_modules_total = _root_go_modules_total(modules)
+    exported_symbols_total = _exported_symbols_total(project_model, package_graph)
+    docs_packages_total = _docs_packages_total(project_model, package_graph)
     has_go = bool(go_units or packages_total or go_modules_total)
     has_tests = bool(project_summary.get("has_tests")) or _any_path_contains(project_model, "_test.")
     has_cobra_terms = _contains_terms(
         [project_model, package_graph, config_inventory],
         {"cobra", "command", "commands", "completion", "completions", "flag", "pflag"},
+    )
+    has_service_surface = bool(frontend_units or http_routes_total > 0 or api_specs_total > 0)
+    has_go_library_shape = (
+        has_go
+        and not has_service_surface
+        and packages_total > 0
+        and entrypoint_packages_total == 0
     )
 
     signals = {
@@ -64,7 +74,10 @@ def classify_repository(artifacts: dict[str, Any]) -> RepositoryClassification:
         "infra_units_total": len(infra_units),
         "go_units_total": len(go_units),
         "go_modules_total": go_modules_total,
+        "root_go_modules_total": root_go_modules_total,
         "packages_total": packages_total,
+        "exported_symbols_total": exported_symbols_total,
+        "docs_packages_total": docs_packages_total,
         "entrypoint_packages_total": entrypoint_packages_total,
         "http_routes_total": http_routes_total,
         "api_specs_total": api_specs_total,
@@ -72,6 +85,7 @@ def classify_repository(artifacts: dict[str, Any]) -> RepositoryClassification:
         "has_go": has_go,
         "has_tests": has_tests,
         "has_cobra_terms": has_cobra_terms,
+        "has_go_library_shape": has_go_library_shape,
     }
 
     scores = {
@@ -117,9 +131,24 @@ def classify_repository(artifacts: dict[str, Any]) -> RepositoryClassification:
     if has_go and http_routes_total == 0 and not frontend_units and not backend_units:
         scores["library"] += 0.45
         reasoning.append("Go packages without app/service workspace signals detected")
+    if has_go_library_shape:
+        scores["library"] += 0.45
+        reasoning.append("root Go package/module shape detected without HTTP/frontend/API surface")
+        if backend_units:
+            scores["backend_service"] = max(0.0, scores["backend_service"] - 0.25)
+            reasoning.append("backend workspace role downweighted because no service surface was detected")
+    if exported_symbols_total > 0 and has_go and not has_service_surface:
+        scores["library"] += 0.2
+        reasoning.append("exported Go symbols detected without service surface")
+    if root_go_modules_total > 0 and has_go_library_shape:
+        scores["library"] += 0.1
+        reasoning.append("root Go module detected")
+    if docs_packages_total > 0 and has_go and not has_service_surface:
+        scores["library"] += 0.05
+        reasoning.append("Go documentation files/packages detected")
     if has_cobra_terms and not frontend_units:
         scores["library"] += 0.2
-        scores["cli_tool"] += 0.15
+        scores["cli_tool"] += 0.25
         reasoning.append("Cobra/CLI API terms detected")
     if has_go and has_tests:
         scores["library"] += 0.05
@@ -217,6 +246,75 @@ def _contains_terms(values: list[Any], terms: set[str]) -> bool:
             if any(term in lowered for term in terms):
                 return True
     return False
+
+
+def _root_go_modules_total(modules: list[dict[str, Any]]) -> int:
+    total = 0
+    for module in modules:
+        path = str(module.get("dir_path") or module.get("root_path") or ".").strip()
+        if path in {"", "."}:
+            total += 1
+    return total
+
+
+def _exported_symbols_total(project_model: dict[str, Any], package_graph: dict[str, Any]) -> int:
+    explicit = _first_int_in_keys(
+        [project_model, package_graph],
+        {
+            "exported_symbols_total",
+            "public_symbols_total",
+            "runtime_symbols_total",
+        },
+    )
+    if explicit > 0:
+        return explicit
+
+    total = 0
+    for item in _walk_limited([project_model, package_graph], limit=1000):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("symbol_name") or "").strip()
+        if name and name[:1].isupper():
+            total += 1
+    return total
+
+
+def _docs_packages_total(project_model: dict[str, Any], package_graph: dict[str, Any]) -> int:
+    total = 0
+    for item in _walk_limited([project_model, package_graph], limit=1500):
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("file_path") or item.get("path") or "").lower()
+        if path.endswith("/doc.go") or path == "doc.go" or path.startswith("site/content/"):
+            total += 1
+    return total
+
+
+def _first_int_in_keys(values: list[Any], keys: set[str]) -> int:
+    for item in _walk_limited(values, limit=1000):
+        if not isinstance(item, dict):
+            continue
+        for key in keys:
+            value = item.get(key)
+            if value is None:
+                continue
+            parsed = _int(value)
+            if parsed > 0:
+                return parsed
+    return 0
+
+
+def _walk_limited(values: list[Any], *, limit: int) -> list[Any]:
+    result: list[Any] = []
+    stack = list(values)
+    while stack and len(result) < limit:
+        value = stack.pop()
+        result.append(value)
+        if isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value[:100])
+    return result
 
 
 def _as_dicts(value: Any) -> list[dict[str, Any]]:

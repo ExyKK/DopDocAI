@@ -12,12 +12,24 @@ class SectionRepairPlan:
     section_key: str
     findings: list[VerificationFinding]
 
+    @property
+    def evidence_expansion_findings(self) -> list[VerificationFinding]:
+        return [
+            finding
+            for finding in self.findings
+            if finding_requires_targeted_retrieval(finding)
+        ]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "section_key": self.section_key,
             "findings": [finding.to_dict() for finding in self.findings],
             "required_fixes": [
                 finding.suggested_fix or finding.message
+                for finding in self.findings
+            ],
+            "repair_actions": [
+                _repair_action(finding)
                 for finding in self.findings
             ],
         }
@@ -71,6 +83,51 @@ def build_repair_plan(report: VerificationReport) -> RepairPlan:
     )
 
 
+def finding_requires_targeted_retrieval(finding: VerificationFinding) -> bool:
+    if finding.repair_strategy == "expand_evidence":
+        return finding.category not in _RETRIEVAL_BLOCKED_CATEGORIES
+    if finding.category in _RETRIEVAL_NEEDED_CATEGORIES:
+        return True
+    if finding.category == "unsupported_claim":
+        return bool(finding.evidence_needed or finding.retrieval_hints)
+    return False
+
+
+_RETRIEVAL_NEEDED_CATEGORIES = {
+    "missing_coverage",
+    "not_enough_evidence",
+    "weak_evidence",
+}
+_RETRIEVAL_BLOCKED_CATEGORIES = {
+    "contradicted_claim",
+    "wrong_scope",
+    "citation_integrity",
+    "output_hygiene",
+    "readability",
+    "duplication",
+}
+
+
+def _repair_action(finding: VerificationFinding) -> dict[str, Any]:
+    requires_retrieval = finding_requires_targeted_retrieval(finding)
+    if finding.category in _RETRIEVAL_BLOCKED_CATEGORIES:
+        strategy = finding.repair_strategy or "rewrite_existing"
+        retrieval_policy = "blocked"
+    elif requires_retrieval:
+        strategy = "expand_evidence"
+        retrieval_policy = "targeted"
+    else:
+        strategy = finding.repair_strategy or "rewrite_existing"
+        retrieval_policy = "not_needed"
+    return {
+        "check_id": finding.check_id,
+        "category": finding.category,
+        "repair_strategy": strategy,
+        "requires_targeted_retrieval": requires_retrieval,
+        "retrieval_policy": retrieval_policy,
+    }
+
+
 def build_repair_attempts_manifest(
     *,
     documentation_run_id: str,
@@ -79,6 +136,7 @@ def build_repair_attempts_manifest(
     attempts: list[dict[str, Any]],
     plans: list[RepairPlan],
     final_report: VerificationReport,
+    evidence_delta_artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     repaired_sections = sorted(
         {
@@ -95,6 +153,7 @@ def build_repair_attempts_manifest(
         "snapshot_id": snapshot_id,
         "attempts": attempts,
         "plans": [plan.to_dict() for plan in plans],
+        "evidence_delta_artifacts": evidence_delta_artifacts or [],
         "final_verification_status": final_report.status,
         "unresolved_findings": [
             finding.to_dict()
@@ -104,6 +163,7 @@ def build_repair_attempts_manifest(
         "summary": {
             "repair_rounds_total": len(plans),
             "attempts_total": len(attempts),
+            "evidence_delta_artifacts_total": len(evidence_delta_artifacts or []),
             "repaired_sections": repaired_sections,
             "unresolved_errors_total": sum(
                 1 for finding in final_report.findings if finding.severity == "error"

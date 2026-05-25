@@ -75,7 +75,7 @@ def build_section_prompt_contract(
         ),
         PromptMessage(
             role="developer",
-            content=_developer_instructions(output_language),
+            content=_developer_instructions(output_language, template_kind=template_kind),
         ),
         PromptMessage(
             role="user",
@@ -122,29 +122,36 @@ def build_prompt_contract_manifest(
     }
 
 
-def _developer_instructions(output_language: str) -> str:
+def _developer_instructions(output_language: str, *, template_kind: str) -> str:
     language_instruction = {
         "ru": "Write the final markdown in Russian.",
         "en": "Write the final markdown in English.",
     }.get(output_language, f"Write the final markdown in {output_language}.")
 
-    return "\n".join(
-        [
-            language_instruction,
-            "Generate only the requested documentation section, not the whole document.",
-            "Follow the `section_spec` purpose, must_cover, avoid and output_style fields.",
-            "Do not spend space on topics assigned to other sections unless they are needed to explain this section.",
-            "Use Markdown, but return the section body only.",
-            "Do not start with a Markdown heading (`#`, `##`, etc.); the pipeline adds the canonical section heading.",
-            "Do not add a Sources/References appendix; the pipeline appends source mappings automatically.",
-            "Every factual claim about repository behavior, files, commands, APIs, dependencies, or configuration must cite one or more source ids in square brackets, for example [S1] or [S2][S4].",
-            "Use only source ids listed in the evidence pack.",
-            "If evidence is weak or missing, say so explicitly and keep the section partial.",
-            "Prefer precise repository terms from the evidence over generic wording.",
-            "Use commit evidence only as recent history. A historical `deleted` event does not mean the file is absent now unless `current_file_state` is `absent`.",
-            "Do not include raw JSON dumps or repeat evidence tables wholesale.",
-        ]
-    )
+    instructions = [
+        language_instruction,
+        "Generate only the requested documentation section, not the whole document.",
+        "Follow the `section_spec` purpose, must_cover, avoid and output_style fields.",
+        "Do not spend space on topics assigned to other sections unless they are needed to explain this section.",
+        "Use Markdown, but return the section body only.",
+        "Do not start with a Markdown heading (`#`, `##`, etc.); the pipeline adds the canonical section heading.",
+        "Do not add a Sources/References appendix; the pipeline appends source mappings automatically.",
+        "Every factual claim about repository behavior, files, commands, APIs, dependencies, or configuration must cite one or more source ids in square brackets, for example [S1] or [S2][S4].",
+        "Use only source ids listed in the evidence pack.",
+        "If evidence is weak or missing, say so explicitly and keep the section partial.",
+        "Prefer precise repository terms from the evidence over generic wording.",
+        "Use commit evidence only as recent history. A historical `deleted` event does not mean the file is absent now unless `current_file_state` is `absent`.",
+        "Do not include raw JSON dumps or repeat evidence tables wholesale.",
+    ]
+    if template_kind == "go_library_handbook":
+        instructions.extend(
+            [
+                "For Go library/CLI repositories, distinguish repository implementation from downstream consumer examples.",
+                "Do not claim the repository itself contains a consumer `main.go`, `cmd.Execute()` entrypoint, or application wiring unless runtime repository evidence shows that file or symbol.",
+                "Use docs/user-guide/example evidence only as usage examples unless runtime symbols/packages confirm repository implementation behavior.",
+            ]
+        )
+    return "\n".join(instructions)
 
 
 def _user_payload(

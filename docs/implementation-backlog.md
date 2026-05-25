@@ -1020,6 +1020,7 @@
 
 ### DOCS-008C — Усилить verification/repair через targeted evidence expansion
 - Priority: `P1`
+- Status: `completed`
 - Depends on: `DOCS-008`, `DOCS-008B`, `RAG-005`
 - Goal: repair должен уметь не только переписывать секцию по старому evidence pack, но и точечно добирать недостающие факты, когда verification finding показывает реальный evidence gap.
 - Tasks:
@@ -1037,6 +1038,12 @@
 - unsupported/contradicted hallucinations не превращаются в "поиск оправдания": при отсутствии подтверждения они удаляются;
 - повторный verification видит новые source ids как допустимые и проверяет repaired section against old + delta evidence;
 - если targeted retrieval ничего не нашёл, repair остаётся честным partial/unknown, а report сохраняет unresolved finding.
+- Notes:
+- `VerificationFinding` расширен `repair_strategy` и `retrieval_hints`; section judge prompt получает lightweight extracted claims;
+- `repair_plan.schema-v1.json` теперь показывает per-finding repair actions и отделяет `targeted` retrieval от blocked/not-needed случаев;
+- добавлен `repair_evidence_delta.round-{n}.schema-v1.json` per repair round: executed queries, filters, source-neighborhood lookups, added source ids и no-evidence reasons;
+- repair prompt получает `repair_evidence_delta`, а in-memory prompt contracts расширяются новыми `S{n}` source ids перед повторной verification;
+- contradicted/wrong-scope/citation/hygiene findings не запускают retrieval, чтобы поиск не оправдывал галлюцинации.
 
 ### DOCS-009 — Ввести token-budgeted evidence packs
 - Priority: `P0`
@@ -1213,6 +1220,7 @@
 
 ### DOCS-023 — Исправить classification и evidence scope для Go library/CLI репозиториев
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-016`, `DOCS-016B`, `DOCS-017`, `RAG-005`
 - Goal: Cobra-like repositories должны получать typed Go library/CLI documentation, а retrieval evidence не должен превращать consumer docs/examples в current-state claims о самом репозитории.
 - Tasks:
@@ -1228,6 +1236,12 @@
 - generated docs не утверждают, что Cobra repository itself has `main.go`/`cmd.Execute()` entrypoint based only on `site/content/user_guide.md`;
 - retrieval sources in command lifecycle/public API sections are primarily runtime symbols and package graph evidence;
 - wrong-scope consumer-doc claims попадают в verification findings или repair plan.
+- Notes:
+- classifier downweights backend role for root Go module shapes without HTTP/frontend/API surface and adds explicit signals for root modules, exported symbols, docs packages and Cobra/CLI terms;
+- `go_library_handbook` section templates request `go`/`runtime` retrieval for current-state API/command/package sections and keep tests only where relevant;
+- prompt contract adds Go library rules that distinguish repository implementation from downstream consumer examples;
+- deterministic verification now warns on consumer example wrong-scope claims around `main.go`/`cmd.Execute()`;
+- added regression tests for Cobra-like backend-role artifacts, Go library retrieval scope and repair evidence expansion.
 
 ### DOCS-019 — Добавить optional per-run caps и budget guardrails
 - Priority: `P2`

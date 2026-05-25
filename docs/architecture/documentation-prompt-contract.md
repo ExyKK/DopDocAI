@@ -1,7 +1,8 @@
 # Documentation Evidence Packs And Prompt Contract
 
 `DOCS-008`, `DOCS-008B`, `DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015`,
-`DOCS-016B`, `DOCS-017`, `DOCS-018`, `DOCS-020` and `DOCS-021` define the
+`DOCS-016B`, `DOCS-017`, `DOCS-018`, `DOCS-020`, `DOCS-021`, `DOCS-008C`
+and `DOCS-023` define the
 handoff between repository evidence, LLM-backed section generation, verification
 and repair. The pipeline must send bounded, auditable and rendered inputs to the
 model instead of raw analysis artifacts.
@@ -46,6 +47,8 @@ Each raw pack is converted to a rendered pack before prompt construction:
 - retrieval chunks keep concise excerpts with file/symbol/line provenance;
 - generated Swagger/codegen retrieval chunks are filtered from generic handbook
   sections by default;
+- Go library runtime sections prefer Go `runtime` retrieval chunks and filter
+  consumer docs/examples from current-state API/command claims;
 - commit history is normalized into atomic `change_events` with `sha`,
   `short_sha`, `subject`, `path`, `status`, `change_type` and
   `current_file_state`.
@@ -142,10 +145,26 @@ source index, original prompt payload and relevant verification findings.
 Unsupported or contradicted claims must be removed or rewritten as honest
 unknown/partial statements instead of introducing new evidence.
 
+`DOCS-008C` adds targeted evidence expansion before section repair. Repair
+plans classify findings into rewrite-only, retrieval-targeted and retrieval-
+blocked actions. Missing coverage, weak evidence and explicitly
+`expand_evidence` judge findings can run small filtered retrieval queries using
+the finding claim, `evidence_needed`, retrieval hints and section `must_cover`.
+Contradicted, wrong-scope, citation and markdown hygiene findings do not trigger
+retrieval, because those must be removed or rewritten against existing evidence.
+
+When targeted retrieval finds usable matches, the pipeline creates new stable
+source ids (`S{n}`), extends the in-memory prompt contract for the affected
+section and passes a `repair_evidence_delta` object into the repair prompt. The
+next verification round sees both original and delta source ids as allowed. If
+retrieval finds no supporting evidence, the repair prompt keeps the issue as
+unknown/partial instead of inventing a fact.
+
 Repair artifacts:
 
 ```text
 repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/repair_plan.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/repair_evidence_delta.round-{n}.schema-v1.json
 repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/repair_attempts.schema-v1.json
 repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/sections/{section_key}.repair-{n}.md
 ```
@@ -220,6 +239,9 @@ DOPDOC_DOCS_PIPELINE_TRACE_ENABLED=true
 planning. The default `developer_handbook` request is treated as auto-selection:
 
 - Cobra-like Go libraries and CLI/library packages use `go_library_handbook`;
+- root Go modules without HTTP/frontend/API surface are treated as Go
+  library/CLI candidates even if earlier workspace detection marked the unit as
+  `backend`;
 - frontend + backend monorepos use `monorepo_web_app_handbook`;
 - `developer_handbook` remains the fallback for repository shapes without a
   specialized template yet.

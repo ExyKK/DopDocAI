@@ -27,6 +27,8 @@ class RenderedEvidenceSource:
     score: float | None = None
     language: str | None = None
     source_scope: str | None = None
+    workspace_unit_id: str | None = None
+    package_id: str | None = None
     warnings: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,6 +44,8 @@ class RenderedEvidenceSource:
             "score": self.score,
             "language": self.language,
             "source_scope": self.source_scope,
+            "workspace_unit_id": self.workspace_unit_id,
+            "package_id": self.package_id,
             "estimated_tokens": self.estimated_tokens,
             "original_estimated_tokens": self.original_estimated_tokens,
             "warnings": self.warnings or [],
@@ -57,6 +61,8 @@ class RenderedEvidenceSource:
             "symbol_name": self.symbol_name,
             "line_range": _line_range(self.start_line, self.end_line),
             "source_scope": self.source_scope,
+            "workspace_unit_id": self.workspace_unit_id,
+            "package_id": self.package_id,
             "content_markdown": self.content_markdown,
         }
 
@@ -73,6 +79,8 @@ class RenderedEvidenceSource:
             "score": self.score,
             "language": self.language,
             "source_scope": self.source_scope,
+            "workspace_unit_id": self.workspace_unit_id,
+            "package_id": self.package_id,
         }
 
 
@@ -193,6 +201,8 @@ def _render_source(source: EvidencePackSource) -> RenderedEvidenceSource:
         score=source.score,
         language=source.language,
         source_scope=source.source_scope,
+        workspace_unit_id=source.workspace_unit_id,
+        package_id=source.package_id,
         estimated_tokens=estimated,
         original_estimated_tokens=source.estimated_tokens,
         warnings=warnings,

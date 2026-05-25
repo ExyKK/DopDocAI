@@ -20,6 +20,8 @@ class RetrievedSource:
     end_line: int | None
     symbol_name: str | None
     source_kind: str
+    workspace_unit_id: str | None = None
+    package_id: str | None = None
 
 
 class RetrievalClient:
@@ -38,21 +40,46 @@ class RetrievalClient:
         self._include_tests = include_tests
         self._score_threshold = score_threshold
 
-    def search(self, snapshot_id: str, query: str) -> list[RetrievedSource]:
+    def search(
+        self,
+        snapshot_id: str,
+        query: str,
+        *,
+        top_k: int | None = None,
+        filters: dict[str, list[str] | bool] | None = None,
+        include_tests: bool | None = None,
+        score_threshold: float | None = None,
+    ) -> list[RetrievedSource]:
+        merged_filters = {
+            "workspace_unit_ids": [],
+            "languages": [],
+            "source_scopes": [],
+            "chunk_kinds": [],
+            "package_ids": [],
+            "file_paths": [],
+            "include_tests": self._include_tests if include_tests is None else include_tests,
+        }
+        if filters:
+            for key in (
+                "workspace_unit_ids",
+                "languages",
+                "source_scopes",
+                "chunk_kinds",
+                "package_ids",
+                "file_paths",
+            ):
+                values = filters.get(key)
+                if isinstance(values, list):
+                    merged_filters[key] = values
+            if isinstance(filters.get("include_tests"), bool):
+                merged_filters["include_tests"] = filters["include_tests"]
+
         request = {
             "snapshot_id": snapshot_id,
             "query": query,
-            "top_k": self._top_k,
-            "filters": {
-                "workspace_unit_ids": [],
-                "languages": [],
-                "source_scopes": [],
-                "chunk_kinds": [],
-                "package_ids": [],
-                "file_paths": [],
-                "include_tests": self._include_tests,
-            },
-            "score_threshold": self._score_threshold,
+            "top_k": top_k or self._top_k,
+            "filters": merged_filters,
+            "score_threshold": self._score_threshold if score_threshold is None else score_threshold,
         }
         response = httpx.post(
             f"{self._base_url}/internal/v1/retrieval/search",
@@ -70,6 +97,7 @@ class RetrievalClient:
 def _to_source(match: dict[str, Any]) -> RetrievedSource:
     source = match.get("source") or {}
     entity = match.get("entity") or {}
+    package = source.get("package") if isinstance(source.get("package"), dict) else {}
     return RetrievedSource(
         chunk_id=match.get("chunk_id") or "",
         score=float(match.get("score") or 0.0),
@@ -81,6 +109,8 @@ def _to_source(match: dict[str, Any]) -> RetrievedSource:
         end_line=source.get("end_line"),
         symbol_name=entity.get("name"),
         source_kind=entity.get("kind") or entity.get("chunk_kind") or "retrieval_chunk",
+        workspace_unit_id=source.get("workspace_unit_id"),
+        package_id=package.get("package_id"),
     )
 
 

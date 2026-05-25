@@ -6,8 +6,14 @@ from app.infra.llm_client import LlmCompletionResult, LlmProviderError, StubLlmC
 from app.pipeline.generator import GeneratedDocument, GeneratedSection
 from app.pipeline.llm_generation import LlmSectionGenerator
 from app.pipeline.prompt_contract import PromptMessage, SectionPromptContract
-from app.pipeline.repair import build_repair_attempts_manifest, build_repair_plan
-from app.pipeline.verification import DocumentationVerifier
+from app.pipeline.repair import (
+    RepairPlan,
+    SectionRepairPlan,
+    build_repair_attempts_manifest,
+    build_repair_plan,
+)
+from app.pipeline.repair_evidence import build_repair_evidence_delta
+from app.pipeline.verification import DocumentationVerifier, VerificationFinding
 
 
 def test_deterministic_verification_finds_repairable_unknown_citation() -> None:
@@ -234,6 +240,90 @@ def test_repair_attempts_manifest_summarizes_unresolved_errors() -> None:
     assert manifest["summary"]["unresolved_errors_total"] == 1
 
 
+def test_repair_evidence_delta_expands_contract_for_missing_coverage() -> None:
+    finding = VerificationFinding(
+        check_id="llm_judge_section_1",
+        severity="error",
+        category="missing_coverage",
+        message="Command lifecycle is missing Execute evidence.",
+        section_key="command_lifecycle",
+        claim="Explain Command.Execute.",
+        evidence_needed="runtime source for Command.Execute",
+        repairable=True,
+        repair_strategy="expand_evidence",
+        retrieval_hints=["Command.Execute", "ExecuteC"],
+        origin="llm_judge",
+    )
+    plan = RepairPlan(
+        documentation_run_id="run-1",
+        repair_round=1,
+        sections=[SectionRepairPlan("command_lifecycle", [finding])],
+    )
+    contract = _contract(
+        "command_lifecycle",
+        "Command Lifecycle",
+        source_ids=["S1"],
+        template_kind="go_library_handbook",
+    )
+    retrieval = _RepairRetrieval()
+
+    result = build_repair_evidence_delta(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="go_library_handbook",
+        repair_plan=plan,
+        contracts_by_section={contract.section_key: contract},
+        retrieval=retrieval,
+    )
+
+    updated = result.updated_contracts["command_lifecycle"]
+    assert "S2" in updated.source_ids
+    assert result.prompt_deltas["command_lifecycle"]["sources"][0]["source_id"] == "S2"
+    assert result.manifest["summary"]["sources_added_total"] >= 1
+    assert result.manifest["sections"][0]["findings"][0]["status"] == "sources_added"
+    assert retrieval.calls[0]["filters"]["languages"] == ["go"]
+    assert retrieval.calls[0]["filters"]["source_scopes"] == ["runtime"]
+    assert retrieval.calls[0]["include_tests"] is False
+    assert "Command.Execute" in updated.messages[-1].content
+
+
+def test_repair_evidence_delta_blocks_contradicted_claim_retrieval() -> None:
+    finding = VerificationFinding(
+        check_id="llm_judge_section_1",
+        severity="error",
+        category="contradicted_claim",
+        message="Claim contradicts evidence.",
+        section_key="overview",
+        claim="Repository contains a main.go entrypoint.",
+        repairable=True,
+        repair_strategy="expand_evidence",
+        origin="llm_judge",
+    )
+    plan = RepairPlan(
+        documentation_run_id="run-1",
+        repair_round=1,
+        sections=[SectionRepairPlan("overview", [finding])],
+    )
+    contract = _contract("overview", "Overview", source_ids=["S1"], template_kind="go_library_handbook")
+    retrieval = _RepairRetrieval()
+
+    result = build_repair_evidence_delta(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="go_library_handbook",
+        repair_plan=plan,
+        contracts_by_section={contract.section_key: contract},
+        retrieval=retrieval,
+    )
+
+    assert retrieval.calls == []
+    assert result.updated_contracts == {}
+    assert result.manifest["sections"][0]["findings"][0]["retrieval_policy"] == "blocked"
+    assert result.manifest["sections"][0]["findings"][0]["added_source_ids"] == []
+
+
 def _section(key: str, title: str, body: str) -> GeneratedSection:
     return GeneratedSection(
         section_key=key,
@@ -284,10 +374,16 @@ def _manifest(section: GeneratedSection) -> dict:
     }
 
 
-def _contract(key: str, title: str, *, source_ids: list[str]) -> SectionPromptContract:
+def _contract(
+    key: str,
+    title: str,
+    *,
+    source_ids: list[str],
+    template_kind: str = "developer_handbook",
+) -> SectionPromptContract:
     return SectionPromptContract(
         schema_version=1,
-        template_kind="developer_handbook",
+        template_kind=template_kind,
         section_key=key,
         title=title,
         ordinal=1,
@@ -319,10 +415,70 @@ def _contract(key: str, title: str, *, source_ids: list[str]) -> SectionPromptCo
                 "source_id": source_id,
                 "title": f"Evidence {source_id}",
                 "source_kind": "structured_artifact",
+                "language": "go" if template_kind == "go_library_handbook" else None,
+                "source_scope": "runtime" if template_kind == "go_library_handbook" else None,
             }
             for source_id in source_ids
         ],
         estimated_input_tokens=100,
+    )
+
+
+class _RepairRetrieval:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def search(self, snapshot_id: str, query: str, *, top_k=None, filters=None, include_tests=None):
+        self.calls.append(
+            {
+                "snapshot_id": snapshot_id,
+                "query": query,
+                "top_k": top_k,
+                "filters": filters or {},
+                "include_tests": include_tests,
+            }
+        )
+        return [
+            _retrieved(
+                "docs-1",
+                "site/content/user_guide.md",
+                "markdown",
+                "docs",
+                "Consumer main.go calls cmd.Execute().",
+            ),
+            _retrieved(
+                "runtime-1",
+                "command.go",
+                "go",
+                "runtime",
+                "func (c *Command) Execute() error { return c.ExecuteC() }",
+                symbol_name="cobra.Command.Execute",
+            ),
+        ]
+
+
+def _retrieved(
+    chunk_id: str,
+    file_path: str,
+    language: str,
+    source_scope: str,
+    text: str,
+    *,
+    symbol_name: str | None = None,
+):
+    from app.infra.retrieval_client import RetrievedSource
+
+    return RetrievedSource(
+        chunk_id=chunk_id,
+        score=0.9,
+        text=text,
+        file_path=file_path,
+        language=language,
+        source_scope=source_scope,
+        start_line=1,
+        end_line=5,
+        symbol_name=symbol_name,
+        source_kind="go_symbol" if language == "go" else "file_slice",
     )
 
 
