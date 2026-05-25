@@ -49,7 +49,7 @@ def ready() -> dict[str, object]:
 
 def main() -> None:
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
     logger.info("Starting documentation_service API on %s:%s", settings.host, settings.port)

@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 19500
     reload: bool = False
+    log_level: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("DOCS_LOG_LEVEL", "DOPDOC_DOCS_LOG_LEVEL"),
+    )
 
     repos_service_url: str = "http://localhost:19200"
     request_timeout_s: float = 10.0
@@ -133,6 +137,34 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "DOCS_MAX_REPAIR_ROUNDS",
             "DOPDOC_DOCS_MAX_REPAIR_ROUNDS",
+        ),
+    )
+    llm_call_max_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_CALL_MAX_ATTEMPTS",
+            "DOPDOC_DOCS_LLM_CALL_MAX_ATTEMPTS",
+        ),
+    )
+    llm_call_retry_delay_s: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_CALL_RETRY_DELAY_S",
+            "DOPDOC_DOCS_LLM_CALL_RETRY_DELAY_S",
+        ),
+    )
+    llm_json_mode_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "DOCS_LLM_JSON_MODE_ENABLED",
+            "DOPDOC_DOCS_LLM_JSON_MODE_ENABLED",
+        ),
+    )
+    pipeline_trace_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "DOCS_PIPELINE_TRACE_ENABLED",
+            "DOPDOC_DOCS_PIPELINE_TRACE_ENABLED",
         ),
     )
 

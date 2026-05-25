@@ -5,6 +5,7 @@ from typing import Any
 
 from app.infra.llm_client import LlmCompletionProvider, LlmMessage
 from app.pipeline.generator import GeneratedSection
+from app.pipeline.llm_retry import call_llm_with_retry
 from app.pipeline.prompt_contract import SectionPromptContract
 
 
@@ -15,11 +16,20 @@ class SectionGenerationOutput:
 
 
 class LlmSectionGenerator:
-    def __init__(self, provider: LlmCompletionProvider):
+    def __init__(
+        self,
+        provider: LlmCompletionProvider,
+        *,
+        max_attempts: int = 3,
+        retry_delay_s: float = 0.0,
+    ):
         self._provider = provider
+        self._max_attempts = max(1, max_attempts)
+        self._retry_delay_s = max(0.0, retry_delay_s)
 
     def generate_section(self, contract: SectionPromptContract) -> SectionGenerationOutput:
-        result = self._provider.generate(
+        outcome = call_llm_with_retry(
+            self._provider,
             [
                 LlmMessage(role=message.role, content=message.content)
                 for message in contract.messages
@@ -28,8 +38,13 @@ class LlmSectionGenerator:
                 "task": "documentation_section_generation",
                 "section_key": contract.section_key,
                 "template_kind": contract.template_kind,
+                "source_count": str(len(contract.source_ids)),
+                "estimated_input_tokens": str(contract.estimated_input_tokens),
             },
+            max_attempts=self._max_attempts,
+            retry_delay_s=self._retry_delay_s,
         )
+        result = outcome.result
         metadata: dict[str, object] = {
             "provider": result.provider,
             "model": result.model,
@@ -40,6 +55,8 @@ class LlmSectionGenerator:
             "latency_ms": result.latency_ms,
             "response_id": result.response_id,
             "prompt_version": contract.schema_version,
+            "llm_attempts_total": outcome.attempts_total,
+            "llm_retry_errors": outcome.retry_errors,
         }
         processed_markdown, warnings = _post_process_section_markdown(
             result.content,
@@ -70,7 +87,8 @@ class LlmSectionGenerator:
         findings: list[dict[str, Any]],
         repair_round: int,
     ) -> SectionGenerationOutput:
-        result = self._provider.generate(
+        outcome = call_llm_with_retry(
+            self._provider,
             _repair_messages(
                 contract,
                 current_markdown=current_markdown,
@@ -82,8 +100,13 @@ class LlmSectionGenerator:
                 "section_key": contract.section_key,
                 "template_kind": contract.template_kind,
                 "repair_round": str(repair_round),
+                "source_count": str(len(contract.source_ids)),
+                "estimated_input_tokens": str(contract.estimated_input_tokens),
             },
+            max_attempts=self._max_attempts,
+            retry_delay_s=self._retry_delay_s,
         )
+        result = outcome.result
         metadata: dict[str, object] = {
             "provider": result.provider,
             "model": result.model,
@@ -96,6 +119,8 @@ class LlmSectionGenerator:
             "prompt_version": contract.schema_version,
             "repair_round": repair_round,
             "repair_findings_total": len(findings),
+            "llm_attempts_total": outcome.attempts_total,
+            "llm_retry_errors": outcome.retry_errors,
         }
         processed_markdown, warnings = _post_process_section_markdown(
             result.content,

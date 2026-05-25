@@ -116,6 +116,18 @@ class DocumentationWorker:
                         progress_current=progress_current,
                         progress_total=progress_total,
                     )
+                    logger.info(
+                        (
+                            "Documentation run progress documentation_run_id=%s attempt=%s "
+                            "stage=%s progress_pct=%s progress_current=%s progress_total=%s"
+                        ),
+                        run.id,
+                        run.attempt,
+                        stage,
+                        progress_pct,
+                        progress_current,
+                        progress_total,
+                    )
                     heartbeat.ensure_alive()
 
                 plan = self._planning_pipeline.build_developer_handbook(
@@ -139,7 +151,12 @@ class DocumentationWorker:
                     self._settings.worker_id,
                     verification_summary=plan.summary,
                 )
-                logger.info("Completed developer handbook run=%s", run.id)
+                logger.info(
+                    "Completed developer handbook documentation_run_id=%s attempt=%s template_kind=%s",
+                    run.id,
+                    run.attempt,
+                    plan.summary.get("template_kind"),
+                )
 
         except Exception as exc:
             error_code = _map_error_code(exc)
@@ -166,7 +183,7 @@ class DocumentationWorker:
 def main() -> None:
     from app.core.config import settings
 
-    setup_logging()
+    setup_logging(settings.log_level)
     stop = threading.Event()
 
     def _request_stop(signum, frame):
@@ -200,9 +217,9 @@ def main() -> None:
     logger.info("Documentation worker stopped worker_id=%s", worker_id)
 
 
-def setup_logging() -> None:
+def setup_logging(log_level: str = "INFO") -> None:
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
@@ -277,6 +294,10 @@ def _planning_pipeline():
         prompt_output_language=settings.prompt_output_language,
         verification_mode=settings.verification_mode,
         max_repair_rounds=settings.max_repair_rounds,
+        llm_call_max_attempts=settings.llm_call_max_attempts,
+        llm_call_retry_delay_s=settings.llm_call_retry_delay_s,
+        llm_json_mode_enabled=settings.llm_json_mode_enabled,
+        pipeline_trace_enabled=settings.pipeline_trace_enabled,
     )
 
 

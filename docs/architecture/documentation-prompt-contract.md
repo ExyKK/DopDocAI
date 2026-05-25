@@ -1,10 +1,10 @@
 # Documentation Evidence Packs And Prompt Contract
 
 `DOCS-008`, `DOCS-008B`, `DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015`,
-`DOCS-016B`, `DOCS-017` and `DOCS-018` define the handoff between repository
-evidence, LLM-backed section generation, verification and repair. The pipeline
-must send bounded, auditable and rendered inputs to the model instead of raw
-analysis artifacts.
+`DOCS-016B`, `DOCS-017`, `DOCS-018`, `DOCS-020` and `DOCS-021` define the
+handoff between repository evidence, LLM-backed section generation, verification
+and repair. The pipeline must send bounded, auditable and rendered inputs to the
+model instead of raw analysis artifacts.
 
 ## Evidence Pack
 
@@ -98,7 +98,8 @@ repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}
 
 `DOCS-010`/`DOCS-012` use this contract as the input to the LLM provider layer.
 Production-like runs call the configured external provider, while `stub` mode
-keeps deterministic smoke generation available without network calls.
+keeps deterministic smoke generation available without network calls. Generation
+and repair remain markdown calls; judge calls use JSON object mode by default.
 
 ## Verification And Repair
 
@@ -151,6 +152,64 @@ repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}
 After a repair attempt the pipeline republishes the final section markdown,
 rebuilds affected intent-based documents, rebuilds `documentation.md`, updates
 `manifest.schema-v2.json` and verifies the new set again.
+
+Technical LLM failures are handled before job-level retry. The same call-level
+policy is used for section generation, section repair, section judge and
+document-set judge:
+
+- retry `llm_response_empty`, timeout, provider 429/5xx and invalid judge JSON
+  inside the current LLM call;
+- invalid judge JSON receives an extra correction message and the judge request
+  uses `response_format={"type":"json_object"}` while JSON mode is enabled;
+- exhausted technical retries fail the current run attempt with a diagnostic
+  artifact instead of silently starting the whole documentation run over;
+- quality failures from verification stay in the repair loop and then become a
+  failed verification report when repair is exhausted.
+
+Runtime knobs:
+
+```env
+DOPDOC_DOCS_LLM_CALL_MAX_ATTEMPTS=3
+DOPDOC_DOCS_LLM_CALL_RETRY_DELAY_S=1
+DOPDOC_DOCS_LLM_JSON_MODE_ENABLED=true
+```
+
+## Observability And Diagnostics
+
+`DOCS-020` adds compact structured observability to the documentation pipeline.
+The worker logs progress, template selection, LLM call lifecycle and artifact
+publication with stable ids such as `documentation_run_id`, `attempt`,
+`repository_id`, `snapshot_id`, `stage`, `section_key`, `repair_round`,
+`llm_task` and `artifact_kind`.
+
+Every trace-enabled run publishes:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/pipeline_trace.schema-v1.json
+```
+
+`pipeline_trace` is an ordered event log for stages, section generation, judge
+calls, repair calls and artifact publication. It stores provider/model,
+response id, finish reason, token usage, latency and retry counts, but not full
+prompt or response bodies.
+
+When a technical failure interrupts generation, verification or repair before a
+normal report can be produced, the worker also publishes:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/pipeline_error.schema-v1.json
+```
+
+The error artifact contains the failed stage, section key when available,
+repair round, retryable flag, sanitized provider details, completed sections and
+already published artifacts for that attempt.
+
+Runtime knobs:
+
+```env
+DOPDOC_DOCS_LOG_LEVEL=INFO
+DOPDOC_DOCS_PIPELINE_TRACE_ENABLED=true
+```
 
 ## Template Selection
 

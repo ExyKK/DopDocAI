@@ -1137,7 +1137,9 @@
 
 ### DOCS-020 — Добавить structured observability для documentation pipeline
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-012`, `DOCS-008`, `DOCS-008B`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
 - Goal: failed/partial documentation run должен быть диагностируемым без ручного чтения MinIO/Postgres и без догадок по `httpx` логам.
 - Tasks:
 - ввести structured logs для `documentation_worker` и pipeline stages с обязательными полями: `documentation_run_id`, `attempt`, `repository_id`, `snapshot_id`, `template_kind`, `effective_template_kind`, `stage`, `section_key`, `repair_round`, `llm_task`, `artifact_kind`;
@@ -1152,10 +1154,17 @@
 - логи показывают requested/effective template и почему classifier выбрал именно его;
 - failed run публикует machine-readable diagnostics даже если verification не дошёл до final report;
 - `pipeline_trace.schema-v1.json` не содержит полные prompt/response bodies и не раскрывает secrets.
+- Notes:
+- добавлен `pipeline_trace.schema-v1.json` с ordered events по stage, LLM, judge, repair и artifact publication;
+- добавлен `pipeline_error.schema-v1.json` для technical failures до финального verification report;
+- worker/pipeline логируют progress, template selection, LLM lifecycle и artifact publication key-value сообщениями;
+- добавлены `DOPDOC_DOCS_LOG_LEVEL` и `DOPDOC_DOCS_PIPELINE_TRACE_ENABLED`, trace включён по умолчанию.
 
 ### DOCS-021 — Укрепить LLM call policy, JSON mode и retry на уровне вызова
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-010`, `DOCS-008`, `DOCS-020`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
 - Goal: один пустой ответ модели или битый JSON judge не должен переигрывать весь documentation run через job retry.
 - Tasks:
 - расширить `LlmClientConfig` и OpenAI/OpenRouter-compatible client поддержкой per-call `response_format`, включая JSON object mode для judge/structured tasks;
@@ -1170,6 +1179,12 @@
 - `llm_response_empty` на одной секции повторяет только эту секцию, а не весь run;
 - judge получает JSON-mode request, когда режим поддержан;
 - при exhausted call retry run содержит diagnostic artifact с section/task context.
+- Notes:
+- `LlmCompletionProvider.generate` получил per-call `response_format`, OpenRouter/OpenAI-compatible request теперь умеет JSON object mode;
+- judge использует JSON mode по умолчанию и retry correction message при invalid JSON;
+- `call_llm_with_retry` ретраит generation, repair, section judge и document-set judge на уровне конкретного вызова;
+- exhausted retries сохраняют task/section/attempt/retry metadata в exception details и diagnostic artifacts;
+- добавлены тесты на JSON-mode payload, retry пустого ответа, retry invalid judge JSON и trace sanitization.
 
 ### DOCS-022 — Сделать documentation artifacts attempt-scoped и resumable
 - Priority: `P1`

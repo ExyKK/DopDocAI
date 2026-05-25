@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from app.infra.llm_client import LlmCompletionProvider, LlmMessage, LlmProviderError
 from app.pipeline.generator import GeneratedDocument, GeneratedSection
+from app.pipeline.llm_retry import call_llm_with_retry
 from app.pipeline.prompt_contract import SectionPromptContract
 
 VerificationMode = Literal["deterministic", "llm", "hybrid"]
@@ -66,6 +67,9 @@ class JudgeCallMetadata:
     total_tokens: int | None
     latency_ms: int
     response_id: str | None = None
+    attempts_total: int = 1
+    retry_errors: list[dict[str, Any]] = field(default_factory=list)
+    response_format: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +82,9 @@ class JudgeCallMetadata:
             "total_tokens": self.total_tokens,
             "latency_ms": self.latency_ms,
             "response_id": self.response_id,
+            "attempts_total": self.attempts_total,
+            "retry_errors": self.retry_errors,
+            "response_format": self.response_format,
         }
 
 
@@ -170,9 +177,15 @@ class DocumentationVerifier:
         provider: LlmCompletionProvider,
         *,
         mode: VerificationMode = "hybrid",
+        max_attempts: int = 3,
+        retry_delay_s: float = 0.0,
+        json_mode_enabled: bool = True,
     ):
         self._provider = provider
         self._mode = mode
+        self._max_attempts = max(1, max_attempts)
+        self._retry_delay_s = max(0.0, retry_delay_s)
+        self._json_mode_enabled = json_mode_enabled
 
     def verify(
         self,
@@ -249,15 +262,30 @@ class DocumentationVerifier:
         contract: SectionPromptContract,
     ) -> tuple[dict[str, Any], JudgeCallMetadata]:
         payload = _section_judge_payload(section, contract)
-        result = self._provider.generate(
+        response_format = _json_response_format(self._json_mode_enabled)
+        outcome = call_llm_with_retry(
+            self._provider,
             _judge_messages(payload),
             metadata={
                 "task": "documentation_section_verification",
                 "section_key": section.section_key,
                 "template_kind": contract.template_kind,
+                "source_count": str(len(contract.source_ids)),
+                "estimated_input_tokens": str(contract.estimated_input_tokens),
             },
+            response_format=response_format,
+            max_attempts=self._max_attempts,
+            retry_delay_s=self._retry_delay_s,
+            validator=lambda result: _parse_judge_json(result.content),
+            retry_message_factory=_judge_retry_message,
         )
-        return _parse_judge_json(result.content), _call_metadata(f"section:{section.section_key}", result)
+        return outcome.parsed_value, _call_metadata(
+            f"section:{section.section_key}",
+            outcome.result,
+            attempts_total=outcome.attempts_total,
+            retry_errors=outcome.retry_errors,
+            response_format=response_format,
+        )
 
     def _judge_document_set(
         self,
@@ -296,14 +324,28 @@ class DocumentationVerifier:
                 "repeated sections or contradictory cross-document claims should be reported",
             ],
         }
-        result = self._provider.generate(
+        response_format = _json_response_format(self._json_mode_enabled)
+        outcome = call_llm_with_retry(
+            self._provider,
             _judge_messages(payload),
             metadata={
                 "task": "documentation_document_set_verification",
                 "template_kind": template_kind,
+                "source_count": str(len(sections)),
             },
+            response_format=response_format,
+            max_attempts=self._max_attempts,
+            retry_delay_s=self._retry_delay_s,
+            validator=lambda result: _parse_judge_json(result.content),
+            retry_message_factory=_judge_retry_message,
         )
-        return _parse_judge_json(result.content), _call_metadata("document_set", result)
+        return outcome.parsed_value, _call_metadata(
+            "document_set",
+            outcome.result,
+            attempts_total=outcome.attempts_total,
+            retry_errors=outcome.retry_errors,
+            response_format=response_format,
+        )
 
 
 def _deterministic_findings(
@@ -572,12 +614,14 @@ def _parse_judge_json(content: str) -> dict[str, Any]:
             "Verification judge returned invalid JSON.",
             error_code="verification_judge_invalid_response",
             retryable=True,
+            details={"raw_response_excerpt": _truncate(stripped, 1024)},
         ) from exc
     if not isinstance(payload, dict):
         raise LlmProviderError(
             "Verification judge JSON response must be an object.",
             error_code="verification_judge_invalid_response",
             retryable=True,
+            details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
     status = payload.get("status")
     if status not in {"passed", "passed_with_warnings", "failed"}:
@@ -585,6 +629,7 @@ def _parse_judge_json(content: str) -> dict[str, Any]:
             "Verification judge JSON response must contain a valid status.",
             error_code="verification_judge_invalid_response",
             retryable=True,
+            details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
     findings = payload.get("findings")
     if findings is not None and not isinstance(findings, list):
@@ -592,12 +637,14 @@ def _parse_judge_json(content: str) -> dict[str, Any]:
             "Verification judge findings must be an array.",
             error_code="verification_judge_invalid_response",
             retryable=True,
+            details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
     if status in {"passed_with_warnings", "failed"} and not findings:
         raise LlmProviderError(
             "Verification judge non-passing response must include findings.",
             error_code="verification_judge_invalid_response",
             retryable=True,
+            details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
     return payload
 
@@ -638,7 +685,14 @@ def _findings_from_judge(
     return findings
 
 
-def _call_metadata(scope: str, result: Any) -> JudgeCallMetadata:
+def _call_metadata(
+    scope: str,
+    result: Any,
+    *,
+    attempts_total: int = 1,
+    retry_errors: list[dict[str, Any]] | None = None,
+    response_format: dict[str, Any] | None = None,
+) -> JudgeCallMetadata:
     return JudgeCallMetadata(
         scope=scope,
         provider=result.provider,
@@ -649,6 +703,25 @@ def _call_metadata(scope: str, result: Any) -> JudgeCallMetadata:
         total_tokens=result.total_tokens,
         latency_ms=result.latency_ms,
         response_id=result.response_id,
+        attempts_total=attempts_total,
+        retry_errors=retry_errors or [],
+        response_format=response_format,
+    )
+
+
+def _json_response_format(enabled: bool) -> dict[str, Any] | None:
+    return {"type": "json_object"} if enabled else None
+
+
+def _judge_retry_message(error: LlmProviderError, attempt: int) -> LlmMessage:
+    return LlmMessage(
+        role="developer",
+        content=(
+            "Your previous verification response was invalid. "
+            f"Error code: {error.error_code}. Attempt: {attempt}. "
+            "Return a single valid JSON object only, without markdown fences, prose, comments or trailing text. "
+            "The JSON object must include status, scores and findings fields."
+        ),
     )
 
 

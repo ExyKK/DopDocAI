@@ -17,6 +17,7 @@ from app.pipeline.evidence_pack import (
 )
 from app.pipeline.generator import DeveloperHandbookGenerator, GeneratedDocument, GeneratedSection
 from app.pipeline.llm_generation import LlmSectionGenerator
+from app.pipeline.pipeline_trace import PipelineTrace, error_payload
 from app.pipeline.prompt_contract import (
     SectionPromptContract,
     build_prompt_contract_manifest,
@@ -71,15 +72,34 @@ class DocumentationGenerationPipeline:
         prompt_output_language: str = "ru",
         verification_mode: VerificationMode = "hybrid",
         max_repair_rounds: int = 2,
+        llm_call_max_attempts: int = 3,
+        llm_call_retry_delay_s: float = 1.0,
+        llm_json_mode_enabled: bool = True,
+        pipeline_trace_enabled: bool = True,
     ):
         self._repository_service = repository_service
         self._storage = storage
         self._planner = EvidencePlanner(retrieval, budget=evidence_pack_budget)
         self._generator = DeveloperHandbookGenerator()
-        self._section_generator = LlmSectionGenerator(llm_provider)
-        self._verifier = DocumentationVerifier(llm_provider, mode=verification_mode)
+        self._section_generator = LlmSectionGenerator(
+            llm_provider,
+            max_attempts=llm_call_max_attempts,
+            retry_delay_s=llm_call_retry_delay_s,
+        )
+        self._verifier = DocumentationVerifier(
+            llm_provider,
+            mode=verification_mode,
+            max_attempts=llm_call_max_attempts,
+            retry_delay_s=llm_call_retry_delay_s,
+            json_mode_enabled=llm_json_mode_enabled,
+        )
         self._prompt_output_language = prompt_output_language
         self._max_repair_rounds = max(0, max_repair_rounds)
+        self._pipeline_trace_enabled = pipeline_trace_enabled
+        self._trace: PipelineTrace | None = None
+        self._published_artifacts: list[dict[str, Any]] = []
+        self._failure_context: dict[str, Any] = {}
+        self._pipeline_trace_published = False
 
     def build_developer_handbook(
         self,
@@ -87,7 +107,45 @@ class DocumentationGenerationPipeline:
         *,
         report_progress,
     ) -> DocumentationPlanResult:
+        self._trace = self._new_trace(run)
+        self._published_artifacts = []
+        self._failure_context = {}
+        self._pipeline_trace_published = False
+        self._record_trace(
+            "pipeline_started",
+            documentation_run_id=run.id,
+            repository_id=run.repository_id,
+            snapshot_id=run.snapshot_id,
+            requested_template_kind=run.template_kind,
+            attempt=run.attempt,
+        )
+        try:
+            return self._build_developer_handbook(run, report_progress=report_progress)
+        except Exception as exc:
+            context = self._failure_context or {}
+            self._publish_pipeline_error_safely(
+                run=run,
+                stage=str(context.get("stage") or "pipeline"),
+                error=exc,
+                section_key=context.get("section_key"),
+                repair_round=context.get("repair_round"),
+                completed_sections=context.get("completed_sections"),
+            )
+            raise
+        finally:
+            self._trace = None
+            self._published_artifacts = []
+            self._failure_context = {}
+            self._pipeline_trace_published = False
+
+    def _build_developer_handbook(
+        self,
+        run: ClaimedDocumentationRun,
+        *,
+        report_progress,
+    ) -> DocumentationPlanResult:
         report_progress("loading_project_model", 20)
+        self._record_trace("stage_started", stage="loading_project_model", progress_pct=20)
         refs = self._repository_service.list_analysis_artifacts(run.repository_id, run.snapshot_id)
         latest_refs = _latest_by_kind(refs)
         artifacts = self._load_required_artifacts(latest_refs)
@@ -95,8 +153,20 @@ class DocumentationGenerationPipeline:
         template_selection = select_documentation_template(run.template_kind, repository_classification)
         effective_template_kind = template_selection.effective_template_kind
         templates = get_section_templates(effective_template_kind)
+        self._record_template_selection(
+            requested_template_kind=run.template_kind,
+            effective_template_kind=effective_template_kind,
+            template_selection=template_selection.to_dict(),
+            repository_classification=repository_classification.to_dict(),
+        )
 
         report_progress("planning_sections", 35, progress_total=len(templates))
+        self._record_trace(
+            "stage_started",
+            stage="planning_sections",
+            progress_pct=35,
+            sections_total=len(templates),
+        )
         sections = self._planner.plan(
             snapshot_id=run.snapshot_id,
             templates=templates,
@@ -111,6 +181,13 @@ class DocumentationGenerationPipeline:
         rendered_evidence_packs = _rendered_evidence_packs(sections)
 
         report_progress("retrieving_evidence", 65, progress_current=len(sections), progress_total=len(sections))
+        self._record_trace(
+            "stage_completed",
+            stage="planning_sections",
+            progress_pct=65,
+            sections_total=len(sections),
+            evidence_sources_total=sum(len(section.sources) for section in sections),
+        )
         self._repository_service.replace_documentation_sections(
             run.id,
             [section.to_request() for section in sections],
@@ -163,9 +240,29 @@ class DocumentationGenerationPipeline:
         generated_sections: list[GeneratedSection] = []
         section_artifacts_by_key: dict[str, dict[str, Any]] = {}
         for index, contract in enumerate(prompt_contracts, start=1):
+            self._record_trace(
+                "llm_section_generation_started",
+                stage="generating_sections",
+                llm_task="documentation_section_generation",
+                section_key=contract.section_key,
+                source_count=len(contract.source_ids),
+                estimated_input_tokens=contract.estimated_input_tokens,
+            )
             try:
                 generated = self._section_generator.generate_section(contract)
             except Exception as exc:
+                self._set_failure_context(
+                    stage="generating_sections",
+                    section_key=contract.section_key,
+                    completed_sections=[
+                        {
+                            "section_key": section.section_key,
+                            "title": section.title,
+                            "ordinal": section.ordinal,
+                        }
+                        for section in generated_sections
+                    ],
+                )
                 self._publish_generation_error_safely(
                     run=run,
                     contract=contract,
@@ -177,6 +274,11 @@ class DocumentationGenerationPipeline:
 
             section = generated.section
             generated_sections.append(section)
+            self._record_llm_generation_completed(
+                "llm_section_generation_completed",
+                section=section,
+                llm_task="documentation_section_generation",
+            )
             section_artifacts_by_key[section.section_key] = self._publish_section_markdown(run, section)
             report_progress("generating_sections", 78, progress_current=index, progress_total=len(sections))
 
@@ -210,19 +312,35 @@ class DocumentationGenerationPipeline:
                 prompt_contract_artifact=prompt_contract_artifact,
                 rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
             )
-            report = self._verifier.verify(
-                documentation_run_id=run.id,
-                repository_id=run.repository_id,
-                snapshot_id=run.snapshot_id,
-                template_kind=effective_template_kind,
-                requested_template_kind=run.template_kind,
-                sections=generated_sections,
-                documents=bundle.documents,
-                manifest=current_manifest,
-                contracts=prompt_contracts,
-                repair_round=repair_round,
-            )
+            try:
+                report = self._verifier.verify(
+                    documentation_run_id=run.id,
+                    repository_id=run.repository_id,
+                    snapshot_id=run.snapshot_id,
+                    template_kind=effective_template_kind,
+                    requested_template_kind=run.template_kind,
+                    sections=generated_sections,
+                    documents=bundle.documents,
+                    manifest=current_manifest,
+                    contracts=prompt_contracts,
+                    repair_round=repair_round,
+                )
+            except Exception:
+                self._set_failure_context(
+                    stage="verifying_documentation",
+                    repair_round=repair_round,
+                    completed_sections=[
+                        {
+                            "section_key": section.section_key,
+                            "title": section.title,
+                            "ordinal": section.ordinal,
+                        }
+                        for section in generated_sections
+                    ],
+                )
+                raise
             verification_reports.append(report)
+            self._record_verification_completed(report)
             if not report.has_hard_errors():
                 break
             if repair_round >= self._max_repair_rounds:
@@ -245,12 +363,41 @@ class DocumentationGenerationPipeline:
                 if contract is None or current_section is None:
                     continue
 
-                repaired = self._section_generator.repair_section(
-                    contract,
-                    current_markdown=current_section.content_markdown,
-                    findings=[finding.to_dict() for finding in section_plan.findings],
+                self._record_trace(
+                    "llm_section_repair_started",
+                    stage="repairing_documentation",
+                    llm_task="documentation_section_repair",
+                    section_key=contract.section_key,
                     repair_round=plan.repair_round,
-                ).section
+                    findings_total=len(section_plan.findings),
+                )
+                try:
+                    repaired = self._section_generator.repair_section(
+                        contract,
+                        current_markdown=current_section.content_markdown,
+                        findings=[finding.to_dict() for finding in section_plan.findings],
+                        repair_round=plan.repair_round,
+                    ).section
+                except Exception:
+                    self._set_failure_context(
+                        stage="repairing_documentation",
+                        section_key=contract.section_key,
+                        repair_round=plan.repair_round,
+                        completed_sections=[
+                            {
+                                "section_key": section.section_key,
+                                "title": section.title,
+                                "ordinal": section.ordinal,
+                            }
+                            for section in generated_sections
+                        ],
+                    )
+                    raise
+                self._record_llm_generation_completed(
+                    "llm_section_repair_completed",
+                    section=repaired,
+                    llm_task="documentation_section_repair",
+                )
                 attempt_artifact = self._publish_markdown(
                     run=run,
                     artifact_kind=f"section_markdown_attempt_{plan.repair_round}",
@@ -333,6 +480,10 @@ class DocumentationGenerationPipeline:
                 payload=repair_attempts_manifest,
             )
 
+        pipeline_trace_artifact = self._publish_pipeline_trace_safely(
+            run,
+            status="failed" if final_report.has_hard_errors() else "succeeded",
+        )
         manifest = self._build_manifest(
             run=run,
             template_kind=effective_template_kind,
@@ -349,6 +500,7 @@ class DocumentationGenerationPipeline:
             repair_summary=(repair_attempts_manifest or {}).get("summary"),
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            pipeline_trace_artifact=pipeline_trace_artifact,
         )
         manifest_artifact = self._publish_json(
             run=run,
@@ -435,6 +587,7 @@ class DocumentationGenerationPipeline:
                 "repair_summary": (repair_attempts_manifest or {}).get("summary"),
                 "repair_plan_artifact": repair_plan_artifact,
                 "repair_attempts_artifact": repair_attempts_artifact,
+                "pipeline_trace_artifact": pipeline_trace_artifact,
                 "evidence_pack_artifact": evidence_pack_artifact,
                 "rendered_evidence_pack_artifact": rendered_evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
@@ -536,6 +689,7 @@ class DocumentationGenerationPipeline:
         repair_summary: dict[str, Any] | None = None,
         repair_plan_artifact: dict[str, Any] | None = None,
         repair_attempts_artifact: dict[str, Any] | None = None,
+        pipeline_trace_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._generator.build_manifest(
             documentation_run_id=run.id,
@@ -561,6 +715,7 @@ class DocumentationGenerationPipeline:
             repair_summary=repair_summary,
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            pipeline_trace_artifact=pipeline_trace_artifact,
         )
 
     def _publish_markdown(
@@ -571,6 +726,7 @@ class DocumentationGenerationPipeline:
         section_key: str | None,
         key: str,
         markdown: str,
+        record_trace: bool = True,
     ) -> dict[str, Any]:
         return self._publish_bytes(
             run=run,
@@ -580,6 +736,7 @@ class DocumentationGenerationPipeline:
             payload=markdown.encode("utf-8"),
             content_type="text/markdown; charset=utf-8",
             format="markdown",
+            record_trace=record_trace,
         )
 
     def _publish_json(
@@ -591,6 +748,7 @@ class DocumentationGenerationPipeline:
         key: str,
         payload: dict[str, Any],
         schema_version: int = 1,
+        record_trace: bool = True,
     ) -> dict[str, Any]:
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode("utf-8")
         return self._publish_bytes(
@@ -602,6 +760,7 @@ class DocumentationGenerationPipeline:
             content_type="application/json; charset=utf-8",
             format="json",
             schema_version=schema_version,
+            record_trace=record_trace,
         )
 
     def _publish_bytes(
@@ -615,10 +774,11 @@ class DocumentationGenerationPipeline:
         content_type: str,
         format: str,
         schema_version: int = 1,
+        record_trace: bool = True,
     ) -> dict[str, Any]:
         checksum = hashlib.sha256(payload).hexdigest()
         self._storage.put_bytes(key, payload, content_type)
-        return self._repository_service.register_documentation_artifact(
+        artifact = self._repository_service.register_documentation_artifact(
             run.id,
             {
                 "artifact_kind": artifact_kind,
@@ -632,6 +792,242 @@ class DocumentationGenerationPipeline:
                 "schema_version": schema_version,
             },
         )
+        summary = {
+            "artifact_kind": artifact_kind,
+            "section_key": section_key,
+            "storage_key": key,
+            "schema_version": schema_version,
+            "size_bytes": len(payload),
+            "checksum_sha256": checksum,
+        }
+        self._published_artifacts.append(summary)
+        logger.info(
+            (
+                "Documentation artifact published documentation_run_id=%s attempt=%s "
+                "artifact_kind=%s section_key=%s storage_key=%s schema_version=%s "
+                "size_bytes=%s checksum_sha256=%s"
+            ),
+            run.id,
+            run.attempt,
+            artifact_kind,
+            section_key,
+            key,
+            schema_version,
+            len(payload),
+            checksum,
+        )
+        if record_trace:
+            self._record_trace("artifact_published", **summary)
+        return artifact
+
+    def _new_trace(self, run: ClaimedDocumentationRun) -> PipelineTrace | None:
+        if not self._pipeline_trace_enabled:
+            return None
+        return PipelineTrace(
+            documentation_run_id=run.id,
+            repository_id=run.repository_id,
+            snapshot_id=run.snapshot_id,
+            attempt=run.attempt,
+            requested_template_kind=run.template_kind,
+        )
+
+    def _record_trace(self, event_type: str, **fields: Any) -> None:
+        if self._trace is not None:
+            self._trace.record(event_type, **fields)
+
+    def _record_template_selection(
+        self,
+        *,
+        requested_template_kind: str | None,
+        effective_template_kind: str,
+        template_selection: dict[str, Any],
+        repository_classification: dict[str, Any],
+    ) -> None:
+        if self._trace is not None:
+            self._trace.set_template_context(
+                effective_template_kind=effective_template_kind,
+                template_selection=template_selection,
+                repository_classification=repository_classification,
+            )
+        classification_kind = repository_classification.get("repository_kind")
+        confidence = repository_classification.get("confidence")
+        top_signals = repository_classification.get("signals") or []
+        reason = template_selection.get("reason")
+        logger.info(
+            (
+                "Documentation template selected requested_template_kind=%s "
+                "effective_template_kind=%s repository_kind=%s confidence=%s "
+                "reason=%s top_signals=%s"
+            ),
+            requested_template_kind,
+            effective_template_kind,
+            classification_kind,
+            confidence,
+            reason,
+            top_signals[:5] if isinstance(top_signals, list) else top_signals,
+        )
+        self._record_trace(
+            "template_selected",
+            requested_template_kind=requested_template_kind,
+            effective_template_kind=effective_template_kind,
+            repository_kind=classification_kind,
+            confidence=confidence,
+            reason=reason,
+            top_signals=top_signals[:5] if isinstance(top_signals, list) else top_signals,
+        )
+
+    def _record_llm_generation_completed(
+        self,
+        event_type: str,
+        *,
+        section: GeneratedSection,
+        llm_task: str,
+    ) -> None:
+        generation = section.generation or {}
+        retry_errors = generation.get("llm_retry_errors") or []
+        self._record_trace(
+            event_type,
+            llm_task=llm_task,
+            section_key=section.section_key,
+            provider=generation.get("provider"),
+            model=generation.get("model"),
+            response_id=generation.get("response_id"),
+            finish_reason=generation.get("finish_reason"),
+            prompt_tokens=generation.get("prompt_tokens"),
+            completion_tokens=generation.get("completion_tokens"),
+            total_tokens=generation.get("total_tokens"),
+            latency_ms=generation.get("latency_ms"),
+            attempts_total=generation.get("llm_attempts_total"),
+            retry_errors_total=len(retry_errors) if isinstance(retry_errors, list) else 0,
+            quality_status=generation.get("quality_status"),
+            warnings=generation.get("warnings"),
+        )
+
+    def _record_verification_completed(self, report: VerificationReport) -> None:
+        summary = report.summary()
+        self._record_trace(
+            "verification_completed",
+            stage="verifying_documentation",
+            repair_round=report.repair_round,
+            status=report.status,
+            judge_calls_total=summary.get("judge_calls_total"),
+            errors_total=summary.get("errors_total"),
+            warnings_total=summary.get("warnings_total"),
+            repairable_errors_total=summary.get("repairable_errors_total"),
+        )
+        for call in report.judge_calls:
+            retry_errors = call.retry_errors or []
+            self._record_trace(
+                "llm_judge_completed",
+                stage="verifying_documentation",
+                llm_task="documentation_judge",
+                scope=call.scope,
+                provider=call.provider,
+                model=call.model,
+                response_id=call.response_id,
+                finish_reason=call.finish_reason,
+                prompt_tokens=call.prompt_tokens,
+                completion_tokens=call.completion_tokens,
+                total_tokens=call.total_tokens,
+                latency_ms=call.latency_ms,
+                attempts_total=call.attempts_total,
+                retry_errors_total=len(retry_errors),
+                response_format=call.response_format,
+            )
+
+    def _set_failure_context(self, **fields: Any) -> None:
+        self._failure_context = fields
+
+    def _publish_pipeline_trace_safely(
+        self,
+        run: ClaimedDocumentationRun,
+        *,
+        status: str,
+    ) -> dict[str, Any] | None:
+        if self._trace is None:
+            return None
+        try:
+            self._record_trace("pipeline_finished", status=status)
+            self._record_trace("pipeline_trace_publishing", status=status)
+            artifact = self._publish_json(
+                run=run,
+                artifact_kind="pipeline_trace",
+                section_key=None,
+                key=(
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                    f"/documentation-runs/{run.id}/pipeline_trace.schema-v1.json"
+                ),
+                payload=self._trace.to_dict(status=status),
+                record_trace=False,
+            )
+            self._pipeline_trace_published = True
+            return artifact
+        except Exception:
+            logger.warning(
+                "Could not publish pipeline trace for documentation_run=%s",
+                run.id,
+                exc_info=True,
+            )
+            return None
+
+    def _publish_pipeline_error_safely(
+        self,
+        *,
+        run: ClaimedDocumentationRun,
+        stage: str,
+        error: Exception,
+        section_key: str | None = None,
+        repair_round: int | None = None,
+        completed_sections: list[dict[str, Any]] | None = None,
+    ) -> None:
+        if isinstance(error, DocumentationVerificationError):
+            if not self._pipeline_trace_published:
+                self._publish_pipeline_trace_safely(run, status="failed")
+            return
+
+        failure = error_payload(error)
+        self._record_trace(
+            "pipeline_failed",
+            stage=stage,
+            section_key=section_key,
+            repair_round=repair_round,
+            error=failure,
+        )
+        payload = {
+            "schema_version": 1,
+            "artifact_kind": "pipeline_error",
+            "documentation_run_id": run.id,
+            "repository_id": run.repository_id,
+            "snapshot_id": run.snapshot_id,
+            "attempt": run.attempt,
+            "requested_template_kind": run.template_kind,
+            "effective_template_kind": self._trace.effective_template_kind if self._trace else None,
+            "stage": stage,
+            "section_key": section_key,
+            "repair_round": repair_round,
+            "error": failure,
+            "completed_sections": completed_sections or [],
+            "published_artifacts": list(self._published_artifacts),
+            "trace_summary": self._trace.summary() if self._trace else None,
+        }
+        try:
+            self._publish_json(
+                run=run,
+                artifact_kind="pipeline_error",
+                section_key=section_key,
+                key=(
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                    f"/documentation-runs/{run.id}/pipeline_error.schema-v1.json"
+                ),
+                payload=payload,
+            )
+        except Exception:
+            logger.warning(
+                "Could not publish pipeline error artifact for documentation_run=%s",
+                run.id,
+                exc_info=True,
+            )
+        self._publish_pipeline_trace_safely(run, status="failed")
 
     def _publish_generation_error_safely(
         self,

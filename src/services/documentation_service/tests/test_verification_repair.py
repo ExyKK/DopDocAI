@@ -88,7 +88,11 @@ def test_llm_judge_findings_are_validated_and_recorded() -> None:
 
 def test_invalid_judge_json_is_retryable_provider_error() -> None:
     provider = _TextProvider("not-json")
-    section = _section("overview", "Overview", "Описание проекта [S1].")
+    section = _section(
+        "overview",
+        "Overview",
+        "Репозиторий содержит достаточно подробное описание текущего состояния проекта [S1].",
+    )
     contract = _contract("overview", "Overview", source_ids=["S1"])
 
     with pytest.raises(LlmProviderError) as exc:
@@ -106,6 +110,49 @@ def test_invalid_judge_json_is_retryable_provider_error() -> None:
 
     assert exc.value.error_code == "verification_judge_invalid_response"
     assert exc.value.retryable is True
+    assert exc.value.details["attempts_total"] == 3
+
+
+def test_invalid_judge_json_retries_and_uses_json_mode() -> None:
+    provider = _MixedProvider(
+        [
+            "not-json",
+            {
+                "status": "passed",
+                "scores": {"groundedness": 0.9},
+                "findings": [],
+            },
+            {
+                "status": "passed",
+                "scores": {"usefulness": 0.8},
+                "findings": [],
+            },
+        ]
+    )
+    section = _section(
+        "overview",
+        "Overview",
+        "Репозиторий содержит достаточно подробное описание текущего состояния проекта [S1].",
+    )
+    contract = _contract("overview", "Overview", source_ids=["S1"])
+
+    report = DocumentationVerifier(provider, mode="llm", max_attempts=2).verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[section],
+        documents=[_document(section)],
+        manifest=_manifest(section),
+        contracts=[contract],
+    )
+
+    assert report.status == "passed_with_warnings"
+    assert provider.calls == 3
+    assert provider.response_formats == [{"type": "json_object"}] * 3
+    assert report.judge_calls[0].attempts_total == 2
+    assert report.judge_calls[0].retry_errors[0]["error_code"] == "verification_judge_invalid_response"
 
 
 def test_judge_failed_status_requires_findings() -> None:
@@ -114,7 +161,7 @@ def test_judge_failed_status_requires_findings() -> None:
     contract = _contract("overview", "Overview", source_ids=["S1"])
 
     with pytest.raises(LlmProviderError) as exc:
-        DocumentationVerifier(provider, mode="llm").verify(
+        DocumentationVerifier(provider, mode="llm", max_attempts=1).verify(
             documentation_run_id="run-1",
             repository_id="repo-1",
             snapshot_id="snapshot-1",
@@ -285,7 +332,7 @@ class _JsonProvider:
     def __init__(self, payloads: list[dict]):
         self._payloads = payloads
 
-    def generate(self, messages, *, metadata=None):
+    def generate(self, messages, *, metadata=None, response_format=None):
         payload = self._payloads.pop(0)
         return _result(json.dumps(payload), provider=self.provider_name)
 
@@ -296,8 +343,24 @@ class _TextProvider:
     def __init__(self, content: str):
         self._content = content
 
-    def generate(self, messages, *, metadata=None):
+    def generate(self, messages, *, metadata=None, response_format=None):
         return _result(self._content, provider=self.provider_name)
+
+
+class _MixedProvider:
+    provider_name = "openrouter"
+
+    def __init__(self, payloads: list[dict | str]):
+        self._payloads = payloads
+        self.calls = 0
+        self.response_formats: list[dict | None] = []
+
+    def generate(self, messages, *, metadata=None, response_format=None):
+        self.calls += 1
+        self.response_formats.append(response_format)
+        payload = self._payloads.pop(0)
+        content = json.dumps(payload) if isinstance(payload, dict) else payload
+        return _result(content, provider=self.provider_name)
 
 
 def _result(content: str, *, provider: str) -> LlmCompletionResult:

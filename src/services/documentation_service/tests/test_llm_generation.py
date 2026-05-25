@@ -2,6 +2,7 @@ import httpx
 
 from app.infra.llm_client import (
     LlmClientConfig,
+    LlmCompletionResult,
     LlmProviderError,
     OpenAiCompatibleLlmCompletionProvider,
     StubLlmCompletionProvider,
@@ -41,8 +42,8 @@ def test_section_generator_strips_model_heading_and_records_warning() -> None:
     )
 
     class HeadingProvider(StubLlmCompletionProvider):
-        def generate(self, messages, *, metadata=None):
-            result = super().generate(messages, metadata=metadata)
+        def generate(self, messages, *, metadata=None, response_format=None):
+            result = super().generate(messages, metadata=metadata, response_format=response_format)
             return result.__class__(
                 content="## Лишний заголовок\n\nТело секции [S1].",
                 provider=result.provider,
@@ -62,6 +63,24 @@ def test_section_generator_strips_model_heading_and_records_warning() -> None:
     assert generated.section.generation is not None
     assert generated.section.generation["warnings"][0]["code"] == "leading_heading_removed"
     assert generated.section.generation["quality_status"] == "ok"
+
+
+def test_section_generator_retries_empty_provider_response() -> None:
+    section = _section_with_pack()
+    contract = build_section_prompt_contract(
+        section,
+        template_kind="developer_handbook",
+        output_language="ru",
+    )
+    provider = _FlakyTextProvider()
+
+    generated = LlmSectionGenerator(provider, max_attempts=2).generate_section(contract)
+
+    assert provider.calls == 2
+    assert "Recovered section" in generated.section.content_markdown
+    assert generated.section.generation is not None
+    assert generated.section.generation["llm_attempts_total"] == 2
+    assert generated.section.generation["llm_retry_errors"][0]["error_code"] == "llm_response_empty"
 
 
 def test_openai_compatible_provider_sends_openrouter_headers_and_provider_options(
@@ -132,6 +151,44 @@ def test_openai_compatible_provider_sends_openrouter_headers_and_provider_option
     }
 
 
+def test_openai_compatible_provider_sends_json_response_format(monkeypatch) -> None:
+    requests = []
+
+    def fake_post(url, *, headers, json, timeout):
+        requests.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "id": "judge-1",
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "message": {"content": '{"status":"passed","findings":[]}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    provider = OpenAiCompatibleLlmCompletionProvider(
+        LlmClientConfig(
+            provider="openrouter",
+            endpoint="https://openrouter.ai/api/v1/chat/completions",
+            api_key="test-key",
+            model="deepseek/deepseek-v4-flash",
+            timeout_s=90,
+            temperature=0.2,
+            max_tokens=4096,
+            top_p=0.95,
+        )
+    )
+
+    provider.generate([], response_format={"type": "json_object"})
+
+    assert requests[0]["response_format"] == {"type": "json_object"}
+
+
 def test_openai_compatible_provider_marks_rate_limit_retryable(monkeypatch) -> None:
     def fake_post(url, *, headers, json, timeout):
         return httpx.Response(429, text="too many requests")
@@ -178,3 +235,31 @@ def _section_with_pack() -> SectionEvidence:
     )
     section.rendered_evidence_pack = build_rendered_evidence_pack(section.evidence_pack)
     return section
+
+
+class _FlakyTextProvider:
+    provider_name = "openrouter"
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate(self, messages, *, metadata=None, response_format=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise LlmProviderError(
+                "empty",
+                error_code="llm_response_empty",
+                retryable=True,
+                details={"response_id": "empty-1", "finish_reason": "stop"},
+            )
+        return LlmCompletionResult(
+            content="Recovered section [S1].",
+            model="test-model",
+            provider=self.provider_name,
+            finish_reason="stop",
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            latency_ms=1,
+            response_id="ok-1",
+        )

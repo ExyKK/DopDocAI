@@ -32,6 +32,13 @@ DOPDOC_DOCS_OUTPUT_LANGUAGE=ru
 DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS=120000
 DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS=16000
 DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES=80
+DOPDOC_DOCS_VERIFICATION_MODE=hybrid
+DOPDOC_DOCS_MAX_REPAIR_ROUNDS=2
+DOPDOC_DOCS_LLM_CALL_MAX_ATTEMPTS=3
+DOPDOC_DOCS_LLM_CALL_RETRY_DELAY_S=1
+DOPDOC_DOCS_LLM_JSON_MODE_ENABLED=true
+DOPDOC_DOCS_PIPELINE_TRACE_ENABLED=true
+DOPDOC_DOCS_LOG_LEVEL=INFO
 
 DOPDOC_EMBEDDING_PROVIDER=jina_http
 DOPDOC_EMBEDDING_MODEL=jinaai/jina-code-embeddings-0.5b
@@ -78,7 +85,10 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
 `documentation_service` uses `DOPDOC_DOCS_LLM_MAX_TOKENS` for section output
-length, while ChatService keeps the shared `DOPDOC_LLM_MAX_TOKENS` default. For
-OpenRouter routing experiments, put a JSON provider object into
-`DOPDOC_LLM_PROVIDER_OPTIONS_JSON`, for example `{"sort":"throughput"}`, and use
-the max price knobs to produce `provider.max_price`.
+length, while ChatService keeps the shared `DOPDOC_LLM_MAX_TOKENS` default.
+Judge calls use JSON object mode by default, and generation/judge/repair LLM
+calls retry locally before the job-level retry is used. Trace artifacts are also
+on by default for manual debugging. For OpenRouter routing experiments, put a
+JSON provider object into `DOPDOC_LLM_PROVIDER_OPTIONS_JSON`, for example
+`{"sort":"throughput"}`, and use the max price knobs to produce
+`provider.max_price`.

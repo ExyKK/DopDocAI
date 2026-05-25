@@ -41,6 +41,7 @@ class LlmCompletionResult:
     total_tokens: int | None
     latency_ms: int
     response_id: str | None = None
+    raw_response_excerpt: str | None = None
 
 
 class LlmProviderError(RuntimeError):
@@ -51,11 +52,13 @@ class LlmProviderError(RuntimeError):
         error_code: str = "llm_provider_failed",
         status_code: int | None = None,
         retryable: bool = True,
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.error_code = error_code
         self.status_code = status_code
         self.retryable = retryable
+        self.details = details or {}
 
 
 class LlmCompletionProvider(Protocol):
@@ -68,6 +71,7 @@ class LlmCompletionProvider(Protocol):
         messages: list[LlmMessage],
         *,
         metadata: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmCompletionResult:
         ...
 
@@ -80,6 +84,7 @@ class StubLlmCompletionProvider:
         messages: list[LlmMessage],
         *,
         metadata: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmCompletionResult:
         started = time.monotonic()
         payload = _user_payload(messages)
@@ -132,6 +137,7 @@ class OpenAiCompatibleLlmCompletionProvider:
         messages: list[LlmMessage],
         *,
         metadata: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmCompletionResult:
         if not self._config.api_key:
             raise LlmProviderError(
@@ -140,7 +146,7 @@ class OpenAiCompatibleLlmCompletionProvider:
                 retryable=False,
             )
 
-        request = self._build_request(messages, metadata=metadata)
+        request = self._build_request(messages, metadata=metadata, response_format=response_format)
         headers = self._headers()
         started = time.monotonic()
         try:
@@ -194,6 +200,7 @@ class OpenAiCompatibleLlmCompletionProvider:
         messages: list[LlmMessage],
         *,
         metadata: dict[str, str] | None,
+        response_format: dict[str, Any] | None,
     ) -> dict[str, Any]:
         request: dict[str, Any] = {
             "model": self._config.model,
@@ -211,6 +218,8 @@ class OpenAiCompatibleLlmCompletionProvider:
         }
         if self._config.repetition_penalty is not None:
             request["repetition_penalty"] = self._config.repetition_penalty
+        if response_format:
+            request["response_format"] = response_format
         if metadata:
             request["metadata"] = {
                 key: value
@@ -268,6 +277,12 @@ def _completion_from_payload(
             "LLM provider response did not contain message content.",
             error_code="llm_response_empty",
             retryable=True,
+            details={
+                "response_id": _optional_str(payload.get("id")),
+                "model": _str_or_default(payload.get("model"), fallback_model),
+                "finish_reason": _optional_str(choice.get("finish_reason") if isinstance(choice, dict) else None),
+                "raw_response_excerpt": _truncate(json.dumps(payload, ensure_ascii=False, default=str), 1024),
+            },
         )
 
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -281,6 +296,7 @@ def _completion_from_payload(
         total_tokens=_int_or_none(usage.get("total_tokens")),
         latency_ms=latency_ms,
         response_id=_optional_str(payload.get("id")),
+        raw_response_excerpt=_truncate(json.dumps(payload, ensure_ascii=False, default=str), 1024),
     )
 
 
