@@ -28,6 +28,7 @@ class SectionPromptContract:
     section_key: str
     title: str
     ordinal: int
+    section_spec: dict[str, Any]
     output_language: str
     messages: list[PromptMessage]
     source_ids: list[str]
@@ -41,6 +42,7 @@ class SectionPromptContract:
             "section_key": self.section_key,
             "title": self.title,
             "ordinal": self.ordinal,
+            "section_spec": self.section_spec,
             "output_language": self.output_language,
             "source_ids": self.source_ids,
             "source_index": self.source_index,
@@ -86,6 +88,7 @@ def build_section_prompt_contract(
         section_key=section.section_key,
         title=section.title,
         ordinal=section.ordinal,
+        section_spec=_section_spec(section),
         output_language=output_language,
         messages=messages,
         source_ids=[source.source_id for source in evidence_pack.sources],
@@ -129,6 +132,8 @@ def _developer_instructions(output_language: str) -> str:
         [
             language_instruction,
             "Generate only the requested documentation section, not the whole document.",
+            "Follow the `section_spec` purpose, must_cover, avoid and output_style fields.",
+            "Do not spend space on topics assigned to other sections unless they are needed to explain this section.",
             "Use Markdown, but return the section body only.",
             "Do not start with a Markdown heading (`#`, `##`, etc.); the pipeline adds the canonical section heading.",
             "Do not add a Sources/References appendix; the pipeline appends source mappings automatically.",
@@ -148,12 +153,13 @@ def _user_payload(
     rendered_evidence_pack: RenderedEvidencePack,
 ) -> str:
     payload = {
-        "task": "Generate one developer handbook section.",
+        "task": "Generate one documentation section.",
         "section": {
             "key": section.section_key,
             "title": section.title,
             "ordinal": section.ordinal,
         },
+        "section_spec": _section_spec(section),
         "citation_rules": {
             "allowed_source_ids": [source.source_id for source in evidence_pack.sources],
             "required": True,
@@ -170,6 +176,20 @@ def _user_payload(
         },
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str)
+
+
+def _section_spec(section: SectionEvidence) -> dict[str, Any]:
+    if section.section_spec:
+        return section.section_spec
+    return {
+        "key": section.section_key,
+        "title": section.title,
+        "purpose": "",
+        "must_cover": [],
+        "avoid": [],
+        "output_style": None,
+        "document_keys": [],
+    }
 
 
 def _estimate_tokens(value: str) -> int:

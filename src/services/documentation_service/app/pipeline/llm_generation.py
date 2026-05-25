@@ -56,6 +56,7 @@ class LlmSectionGenerator:
                 content_markdown=processed_markdown,
                 source_count=len(contract.source_ids),
                 generation=metadata,
+                section_spec=contract.section_spec,
             ),
             metadata=metadata,
         )

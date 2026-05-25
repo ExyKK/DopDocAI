@@ -53,6 +53,13 @@ def test_cobra_like_repository_selects_go_library_handbook() -> None:
     assert {"public_api", "command_lifecycle", "flags_and_args", "completions"}.issubset(
         section_keys
     )
+    assert "change_report" in section_keys
+    command_lifecycle = next(
+        section for section in get_section_templates(selection.effective_template_kind)
+        if section.key == "command_lifecycle"
+    )
+    assert "execute/run lifecycle" in command_lifecycle.must_cover
+    assert "assuming Cobra unless evidence shows Cobra-specific names" in command_lifecycle.avoid
 
 
 def test_image_board_like_repository_selects_monorepo_web_app_handbook() -> None:
@@ -112,6 +119,13 @@ def test_image_board_like_repository_selects_monorepo_web_app_handbook() -> None
     assert {"service_map", "local_development", "request_flows", "api_surface", "frontend"}.issubset(
         section_keys
     )
+    assert "change_report" in section_keys
+    service_map = next(
+        section for section in get_section_templates(selection.effective_template_kind)
+        if section.key == "service_map"
+    )
+    assert "frontend units" in service_map.must_cover
+    assert "architecture_map" in service_map.document_keys
 
 
 def test_explicit_typed_template_bypasses_classified_selection() -> None:

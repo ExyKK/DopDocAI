@@ -18,6 +18,7 @@ class SectionEvidence:
     evidence_pack: EvidencePack | None = None
     rendered_evidence_pack: RenderedEvidencePack | None = None
     prompt_contract: dict[str, Any] | None = None
+    section_spec: dict[str, Any] = field(default_factory=dict)
 
     def to_request(self) -> dict[str, Any]:
         return {
@@ -126,6 +127,7 @@ class _SectionBuilder:
             section_key=self.template.key,
             title=self.template.title,
             ordinal=self.ordinal,
+            section_spec=self.template.to_prompt_dict(),
             status="evidence_ready",
             sources=self.sources,
             evidence=self.evidence,
@@ -176,7 +178,6 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
             ],
         )
         _from_package_graph(builder, package_graph, ["modules", "packages"])
-        _from_commit_log(builder, commit_log, current_file_index)
     elif key == "repository_layout":
         _from_project_model(builder, project_model, ["workspace_units", "files", "ownership_hints"])
         for item in _as_list(project_model.get("workspace_units"))[:12]:
@@ -190,7 +191,6 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
         _from_package_graph(builder, package_graph, ["entrypoint_packages"])
     elif key == "major_flows":
         _from_project_model(builder, project_model, ["http_surface", "integrations", "workspace_units"])
-        _from_commit_log(builder, commit_log, current_file_index)
     elif key == "domain_entities":
         _from_config_inventory(builder, config_inventory, ["data_contracts"])
         _from_project_model(builder, project_model, ["important_symbols", "important_packages"])
@@ -212,6 +212,7 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
     elif key == "known_gaps":
         _from_project_model(builder, project_model, ["diagnostics", "unsupported_patterns", "truncated"])
         _from_config_inventory(builder, config_inventory, ["truncated", "unsupported_patterns"])
+    elif key == "change_report":
         _from_commit_log(builder, commit_log, current_file_index)
     elif key == "public_api":
         _from_project_model(builder, project_model, ["go", "code_outline", "workspace_units"])
@@ -358,6 +359,9 @@ def _add_retrieval_evidence(builder: _SectionBuilder, retrieval: RetrievalClient
 
 
 def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any]]) -> bool:
+    if section_key == "change_report":
+        return False
+
     if len(existing_sources) < 3:
         return True
 

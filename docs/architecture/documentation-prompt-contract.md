@@ -1,9 +1,9 @@
 # Documentation Evidence Packs And Prompt Contract
 
-`DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015` and `DOCS-018` define the handoff
-between repository evidence and LLM-backed section generation. The pipeline must
-send bounded, auditable and rendered inputs to the model instead of raw analysis
-artifacts.
+`DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015`, `DOCS-016B`, `DOCS-017` and
+`DOCS-018` define the handoff between repository evidence and LLM-backed section
+generation. The pipeline must send bounded, auditable and rendered inputs to the
+model instead of raw analysis artifacts.
 
 ## Evidence Pack
 
@@ -60,8 +60,10 @@ Each section prompt contract contains:
 
 - `system` message: the model is a source-grounded documentation generator;
 - `developer` message: output language, body-only markdown shape, citation,
-  commit-history and unknown evidence rules;
-- `user` message: section plan, allowed source ids and rendered evidence
+  section-specific, commit-history and unknown evidence rules;
+- `section_spec`: machine-readable `purpose`, `must_cover`, `avoid`,
+  `output_style` and `document_keys` from the selected template;
+- `user` message: section plan/spec, allowed source ids and rendered evidence
   sources.
 
 Key rules:
@@ -72,6 +74,8 @@ Key rules:
 - state that evidence is missing instead of guessing;
 - generate only the requested section body, without a heading or sources
   appendix;
+- follow the selected section's `section_spec` and avoid drifting into topics
+  assigned to sibling sections;
 - do not infer current file absence from a historical `deleted` event unless
   `current_file_state` is `absent`.
 
@@ -109,3 +113,24 @@ Manual `template_kind` values `go_library_handbook` and
 `monorepo_web_app_handbook` bypass classification. Each run summary and manifest
 records the requested template, effective template, classification kind,
 confidence, signals and scores.
+
+## Intent-Based Output Artifacts
+
+`DOCS-017` keeps generation section-based, but changes publication from one
+large handbook body to a documentation set. The worker still publishes per-section
+markdown for auditability, then assembles intent-based documents:
+
+- `documentation.md`: index document with links to generated artifacts;
+- `repository_brief.md`: short orientation;
+- `onboarding_guide.md`: build/run/test/local development path;
+- `architecture_map.md`: structure, components and flows;
+- `api_reference.md`: API/entry point reference when supported by sections;
+- `configuration_reference.md`: environment/config/deployment facts;
+- `commands_reference.md`: commands, scripts, CLI flags and completions;
+- `package_service_index.md`: package/service/workspace index;
+- `change_report.md`: recent history, kept separate from current architecture.
+
+The manifest is published as `manifest.schema-v2.json`. Its top level now has
+separate `documents[]` and `sections[]` arrays: documents describe reader-facing
+artifacts, while sections preserve generation metadata, section specs, source
+counts and per-section artifact links.

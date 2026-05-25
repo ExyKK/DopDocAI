@@ -169,8 +169,27 @@ class DocumentationGenerationPipeline:
             section_artifacts.append(artifact)
             report_progress("generating_sections", 78, progress_current=index, progress_total=len(sections))
 
-        document_markdown = self._generator.assemble_document(
+        generated_documents = self._generator.assemble_documents(
             generated_sections,
+            template_kind=effective_template_kind,
+        )
+        document_artifacts: list[dict[str, Any]] = []
+        for document in generated_documents:
+            artifact = self._publish_markdown(
+                run=run,
+                artifact_kind=document.artifact_kind,
+                section_key=None,
+                key=(
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                    f"/documentation-runs/{run.id}/{document.file_name}"
+                ),
+                markdown=document.content_markdown,
+            )
+            document_artifacts.append(artifact)
+
+        document_markdown = self._generator.assemble_index_document(
+            generated_documents,
+            sections=generated_sections,
             template_kind=effective_template_kind,
         )
         documentation_artifact = self._publish_markdown(
@@ -191,6 +210,8 @@ class DocumentationGenerationPipeline:
             repository_classification=repository_classification.to_dict(),
             sections=generated_sections,
             section_artifacts=section_artifacts,
+            documents=generated_documents,
+            document_artifacts=document_artifacts,
             documentation_artifact=documentation_artifact,
             evidence_pack_artifact=evidence_pack_artifact,
             prompt_contract_artifact=prompt_contract_artifact,
@@ -200,14 +221,15 @@ class DocumentationGenerationPipeline:
             run=run,
             artifact_kind="manifest",
             section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/manifest.schema-v1.json",
+            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/manifest.schema-v2.json",
             payload=manifest,
+            schema_version=2,
         )
         report_progress(
             "publishing_artifacts",
             92,
-            progress_current=len(section_artifacts) + 5,
-            progress_total=len(section_artifacts) + 5,
+            progress_current=len(section_artifacts) + len(document_artifacts) + 5,
+            progress_total=len(section_artifacts) + len(document_artifacts) + 5,
         )
 
         return DocumentationPlanResult(
@@ -258,11 +280,22 @@ class DocumentationGenerationPipeline:
                     for section in sections
                 },
                 "generated_sections_total": len(generated_sections),
+                "generated_documents_total": len(generated_documents),
+                "generated_documents": [
+                    {
+                        "document_key": document.document_key,
+                        "title": document.title,
+                        "file_name": document.file_name,
+                        "section_keys": list(document.section_keys),
+                    }
+                    for document in generated_documents
+                ],
                 "generation_summary": _generation_summary(generated_sections),
                 "evidence_pack_artifact": evidence_pack_artifact,
                 "rendered_evidence_pack_artifact": rendered_evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
                 "documentation_artifact": documentation_artifact,
+                "document_artifacts": document_artifacts,
                 "manifest_artifact": manifest_artifact,
             },
         )
@@ -308,6 +341,7 @@ class DocumentationGenerationPipeline:
         section_key: str | None,
         key: str,
         payload: dict[str, Any],
+        schema_version: int = 1,
     ) -> dict[str, Any]:
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode("utf-8")
         return self._publish_bytes(
@@ -318,6 +352,7 @@ class DocumentationGenerationPipeline:
             payload=data,
             content_type="application/json; charset=utf-8",
             format="json",
+            schema_version=schema_version,
         )
 
     def _publish_bytes(
@@ -330,6 +365,7 @@ class DocumentationGenerationPipeline:
         payload: bytes,
         content_type: str,
         format: str,
+        schema_version: int = 1,
     ) -> dict[str, Any]:
         checksum = hashlib.sha256(payload).hexdigest()
         self._storage.put_bytes(key, payload, content_type)
@@ -344,7 +380,7 @@ class DocumentationGenerationPipeline:
                 "format": format,
                 "checksum_sha256": checksum,
                 "size_bytes": len(payload),
-                "schema_version": 1,
+                "schema_version": schema_version,
             },
         )
 

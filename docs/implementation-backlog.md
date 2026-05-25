@@ -1138,6 +1138,7 @@
 
 ### DOCS-016B — Передавать section-specific instructions в prompt contract
 - Priority: `P0`
+- Status: `completed`
 - Depends on: `DOCS-016`
 - Goal: typed templates должны управлять не только retrieval-запросами и названиями секций, но и тем, что LLM обязана раскрыть в каждой секции.
 - Tasks:
@@ -1151,9 +1152,15 @@
 - prompt contract содержит machine-readable спецификацию секции помимо evidence;
 - typed templates дают модели конкретные задачи для секции, а не только набор keyword retrieval hints;
 - `DOCS-017` может переиспользовать те же section specs при раскладке секций по intent-based documents.
+- Notes:
+- `SectionTemplate` расширен полями `purpose`, `must_cover`, `avoid`, `output_style` и `document_keys`;
+- `section_spec` передается в prompt contract и user payload, а developer instructions требуют следовать спецификации секции;
+- typed templates теперь явно задают ожидания для Go library/CLI и monorepo web app секций;
+- `cobra` в retrieval queries оставлен только как framework hint, а не как механизм классификации.
 
 ### DOCS-017 — Разделить документацию на intent-based artifacts
 - Priority: `P1`
+- Status: `completed`
 - Depends on: `DOCS-016`, `DOCS-016B`
 - Goal: генерировать не один большой handbook, а набор полезных документов под разные сценарии чтения.
 - Tasks:
@@ -1167,6 +1174,11 @@
 - основной документ не перегружен inventory/reference деталями;
 - change history не загрязняет текущую архитектурную документацию;
 - пользователь может открыть короткий brief или глубокий reference в зависимости от задачи.
+- Notes:
+- generation остается section-based, но публикация теперь собирает отдельные reader-facing artifacts: `repository_brief.md`, `onboarding_guide.md`, `architecture_map.md`, `api_reference.md`, `configuration_reference.md`, `commands_reference.md`, `package_service_index.md`, `change_report.md`;
+- `documentation.md` стал index-документом с ссылками на generated artifacts;
+- `manifest.schema-v2.json` разделяет `documents[]` и `sections[]`;
+- `change_report` добавлен как отдельная section template, а commit evidence больше не добавляется в `overview`, `major_flows` и `known_gaps`.
 
 ### DOCS-018 — Нормализовать commit evidence перед LLM
 - Priority: `P0`

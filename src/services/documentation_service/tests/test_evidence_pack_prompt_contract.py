@@ -73,6 +73,15 @@ def test_prompt_contract_uses_only_evidence_pack_source_ids() -> None:
         ordinal=4,
         status="evidence_ready",
         sources=[],
+        section_spec={
+            "key": "entry_points",
+            "title": "Entry Points",
+            "purpose": "Describe startup and externally reachable handlers.",
+            "must_cover": ["startup paths", "handlers"],
+            "avoid": ["inventing missing APIs"],
+            "output_style": "compact",
+            "document_keys": ["architecture_map", "api_reference"],
+        },
         evidence={"entry_points": [{"file_path": "cmd/server/main.go"}]},
     )
     section.evidence_pack = build_evidence_pack(
@@ -94,11 +103,15 @@ def test_prompt_contract_uses_only_evidence_pack_source_ids() -> None:
 
     assert payload["schema_version"] == 1
     assert payload["template_kind"] == "developer_handbook"
+    assert payload["section_spec"]["purpose"] == "Describe startup and externally reachable handlers."
     assert payload["source_ids"] == ["S1"]
     assert payload["source_index"][0]["source_id"] == "S1"
     assert "Use only source ids listed in the evidence pack" in payload["messages"][1]["content"]
+    assert "Follow the `section_spec` purpose" in payload["messages"][1]["content"]
     assert "return the section body only" in payload["messages"][1]["content"]
     assert '"allowed_source_ids": [' in payload["messages"][2]["content"]
+    assert '"section_spec": {' in payload["messages"][2]["content"]
+    assert '"must_cover": [' in payload["messages"][2]["content"]
     assert '"format": "rendered_markdown_sources"' in payload["messages"][2]["content"]
     assert '"content_markdown":' in payload["messages"][2]["content"]
 
@@ -167,9 +180,9 @@ def test_commit_evidence_keeps_sha_subject_status_boundaries() -> None:
     planner = EvidencePlanner(None)
     templates = (
         SectionTemplate(
-            key="overview",
-            title="Overview",
-            retrieval_query="overview",
+            key="change_report",
+            title="Change Report",
+            retrieval_query="recent commits",
         ),
     )
     artifacts = {
@@ -241,6 +254,38 @@ def test_commit_evidence_keeps_sha_subject_status_boundaries() -> None:
     assert "cbba05f4ba17" in rendered_text
     assert "fucking docker compose" in rendered_text
     assert "Do not infer current file absence" in rendered_text
+
+
+def test_overview_does_not_receive_commit_history_evidence() -> None:
+    planner = EvidencePlanner(None)
+    templates = (
+        SectionTemplate(
+            key="overview",
+            title="Overview",
+            retrieval_query="overview",
+        ),
+    )
+    artifacts = {
+        "project_model": {"summary": {"files_total": 1}},
+        "package_graph": {},
+        "config_inventory": {},
+        "commit_log": {
+            "summary": {"commits_total": 1},
+            "commits": [
+                {
+                    "sha": "abc",
+                    "short_sha": "abc",
+                    "subject": "historical change",
+                    "touched_files": [{"path": "old.go", "change_type": "deleted"}],
+                }
+            ],
+        },
+    }
+
+    sections = planner.plan(snapshot_id="snapshot-1", templates=templates, artifacts=artifacts)
+
+    assert "change_events" not in sections[0].evidence
+    assert "commit_summary" not in sections[0].evidence
 
 
 class _FakeRetrievalClient:
