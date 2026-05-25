@@ -527,7 +527,7 @@ def _render_generic_value(title: str, value: Any) -> str:
     return f"{title}: {_cell(value)}"
 
 
-def _section_with_table(title: str, headers: list[str], rows: list[list[str]], original_rows: list[Any]) -> str:
+def _section_with_table(title: str, headers: list[str], rows: list[list[Any]], original_rows: list[Any]) -> str:
     lines = [f"{title}:"]
     if rows:
         lines.extend(["", *_table(headers, rows)])
@@ -537,9 +537,9 @@ def _section_with_table(title: str, headers: list[str], rows: list[list[str]], o
     return "\n".join(lines)
 
 
-def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
+def _table(headers: list[str], rows: list[list[Any]]) -> list[str]:
     return [
-        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(_escape_cell(header) for header in headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
         *("| " + " | ".join(_escape_cell(cell) for cell in row) + " |" for row in rows),
     ]
@@ -649,8 +649,8 @@ def _cell(value: Any) -> str:
     return _truncate(str(value).replace("\n", " "), _MAX_CELL_LENGTH)
 
 
-def _escape_cell(value: str) -> str:
-    return value.replace("|", "\\|")
+def _escape_cell(value: Any) -> str:
+    return _cell(value).replace("|", "\\|")
 
 
 def _bullet(label: str, value: Any) -> list[str]:

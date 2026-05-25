@@ -116,6 +116,42 @@ def test_prompt_contract_uses_only_evidence_pack_source_ids() -> None:
     assert '"content_markdown":' in payload["messages"][2]["content"]
 
 
+def test_rendered_evidence_table_handles_numeric_workspace_counts() -> None:
+    section = SectionEvidence(
+        section_key="repository_structure",
+        title="Repository Structure",
+        ordinal=2,
+        status="evidence_ready",
+        sources=[],
+        evidence={
+            "workspace_units": [
+                {
+                    "workspace_unit_id": "backend:api",
+                    "unit_kind": "go_service",
+                    "root_path": "backend/api",
+                    "roles": ["backend"],
+                    "frameworks": ["gin"],
+                    "file_counts": {"files_total": 42},
+                    "key_files": [{"path": "backend/api/go.mod"}],
+                }
+            ]
+        },
+    )
+    section.evidence_pack = build_evidence_pack(
+        section_key=section.section_key,
+        title=section.title,
+        ordinal=section.ordinal,
+        evidence=section.evidence,
+        sources=section.sources,
+        budget=EvidencePackBudget(max_tokens=10_000, max_source_tokens=2_000, max_sources=10),
+    )
+
+    rendered = build_rendered_evidence_pack(section.evidence_pack)
+    markdown = rendered.sources[0].content_markdown
+
+    assert "| backend:api | go_service | backend/api | backend | gin | 42 | backend/api/go.mod |" in markdown
+
+
 def test_prompt_contract_fixture_rules_are_present() -> None:
     fixture_path = (
         Path(__file__).parent
