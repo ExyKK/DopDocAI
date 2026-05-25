@@ -195,6 +195,7 @@ internal static class RepositoryModelConfiguration
             builder.ToTable("documentation_artifacts");
             builder.HasKey(x => x.Id);
             builder.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            builder.Property(x => x.Attempt).IsRequired();
             builder.Property(x => x.ArtifactKind).HasMaxLength(128).IsRequired();
             builder.Property(x => x.StorageBucket).HasMaxLength(128).IsRequired();
             builder.Property(x => x.StorageKey).IsRequired();
@@ -202,7 +203,7 @@ internal static class RepositoryModelConfiguration
             builder.Property(x => x.Format).HasMaxLength(64).IsRequired();
             builder.Property(x => x.ChecksumSha256).HasMaxLength(64).IsRequired();
             builder.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
-            builder.HasIndex(x => new { x.DocumentationRunId, x.ArtifactKind });
+            builder.HasIndex(x => new { x.DocumentationRunId, x.Attempt, x.ArtifactKind });
             builder.HasIndex(x => x.SectionId);
             builder.HasOne(x => x.DocumentationRun)
                 .WithMany(x => x.Artifacts)

@@ -32,6 +32,7 @@ internal static class DocumentationContractMapper
         return new RegisterDocumentationArtifactCommand(
             ArtifactKind: request.ArtifactKind,
             SectionKey: request.SectionKey,
+            Attempt: request.Attempt,
             StorageBucket: request.StorageBucket,
             StorageKey: request.StorageKey,
             ContentType: request.ContentType,
@@ -80,6 +81,7 @@ internal static class DocumentationContractMapper
             Id: artifact.Id,
             DocumentationRunId: artifact.DocumentationRunId,
             SectionId: artifact.SectionId,
+            Attempt: artifact.Attempt,
             ArtifactKind: artifact.ArtifactKind,
             StorageBucket: artifact.StorageBucket,
             StorageKey: artifact.StorageKey,

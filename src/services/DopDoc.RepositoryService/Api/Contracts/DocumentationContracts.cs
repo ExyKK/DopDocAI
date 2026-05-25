@@ -56,6 +56,7 @@ public sealed record DocumentationSectionSourceResponse(
 public sealed record RegisterDocumentationArtifactRequest(
     [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
     [property: JsonPropertyName("section_key")] string? SectionKey,
+    [property: JsonPropertyName("attempt")] int? Attempt,
     [property: JsonPropertyName("storage_bucket")] string StorageBucket,
     [property: JsonPropertyName("storage_key")] string StorageKey,
     [property: JsonPropertyName("content_type")] string ContentType,
@@ -69,6 +70,7 @@ public sealed record DocumentationArtifactResponse(
     [property: JsonPropertyName("id")] Guid Id,
     [property: JsonPropertyName("documentation_run_id")] Guid DocumentationRunId,
     [property: JsonPropertyName("section_id")] Guid? SectionId,
+    [property: JsonPropertyName("attempt")] int Attempt,
     [property: JsonPropertyName("artifact_kind")] string ArtifactKind,
     [property: JsonPropertyName("storage_bucket")] string StorageBucket,
     [property: JsonPropertyName("storage_key")] string StorageKey,

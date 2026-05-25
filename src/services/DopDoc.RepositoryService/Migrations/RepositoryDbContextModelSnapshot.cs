@@ -101,6 +101,9 @@ namespace DopDoc.RepositoryService.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<int>("Attempt")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ChecksumSha256")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -146,7 +149,7 @@ namespace DopDoc.RepositoryService.Migrations
 
                     b.HasIndex("SectionId");
 
-                    b.HasIndex("DocumentationRunId", "ArtifactKind");
+                    b.HasIndex("DocumentationRunId", "Attempt", "ArtifactKind");
 
                     b.ToTable("documentation_artifacts", "repo");
                 });

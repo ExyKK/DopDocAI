@@ -80,6 +80,7 @@ public sealed class DocumentationArtifact
     public Guid Id { get; set; }
     public Guid DocumentationRunId { get; set; }
     public Guid? SectionId { get; set; }
+    public int Attempt { get; set; }
     public string ArtifactKind { get; set; } = "";
     public string StorageBucket { get; set; } = "";
     public string StorageKey { get; set; } = "";

@@ -29,10 +29,11 @@ DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS=16000
 DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES=80
 ```
 
-The documentation worker writes a debug/verification artifact:
+The documentation worker writes a draft debug/verification artifact under the
+current job attempt:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/evidence_packs.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/evidence_packs.schema-v1.json
 ```
 
 ## Rendered Evidence Pack
@@ -52,7 +53,7 @@ Each raw pack is converted to a rendered pack before prompt construction:
 The rendered pack is also published for debugging:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/rendered_evidence_packs.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/rendered_evidence_packs.schema-v1.json
 ```
 
 ## Prompt Contract
@@ -93,7 +94,7 @@ The LLM output is post-processed after generation:
 The documentation worker writes the prompt contract manifest:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/prompt_contracts.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/prompt_contracts.schema-v1.json
 ```
 
 `DOCS-010`/`DOCS-012` use this contract as the input to the LLM provider layer.
@@ -119,7 +120,7 @@ assembled. The default mode is `hybrid`:
 The verifier writes:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/verification_report.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/verification_report.schema-v1.json
 ```
 
 The report contains `findings[]`, `section_scores`, `document_scores`,
@@ -144,14 +145,16 @@ unknown/partial statements instead of introducing new evidence.
 Repair artifacts:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/repair_plan.schema-v1.json
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/repair_attempts.schema-v1.json
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/sections/{section_key}.attempt-{n}.md
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/repair_plan.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/repair_attempts.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/sections/{section_key}.repair-{n}.md
 ```
 
-After a repair attempt the pipeline republishes the final section markdown,
-rebuilds affected intent-based documents, rebuilds `documentation.md`, updates
-`manifest.schema-v2.json` and verifies the new set again.
+After a repair attempt the pipeline republishes draft section markdown, rebuilds
+draft intent-based documents under `attempts/{attempt}`, rebuilds draft
+`documentation.md` and verifies the new set again. Stable root
+`documentation.md`, intent documents and `manifest.schema-v2.json` are published
+only after verification succeeds.
 
 Technical LLM failures are handled before job-level retry. The same call-level
 policy is used for section generation, section repair, section judge and
@@ -185,7 +188,7 @@ publication with stable ids such as `documentation_run_id`, `attempt`,
 Every trace-enabled run publishes:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/pipeline_trace.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/pipeline_trace.schema-v1.json
 ```
 
 `pipeline_trace` is an ordered event log for stages, section generation, judge
@@ -197,7 +200,7 @@ When a technical failure interrupts generation, verification or repair before a
 normal report can be produced, the worker also publishes:
 
 ```text
-repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/pipeline_error.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/pipeline_error.schema-v1.json
 ```
 
 The error artifact contains the failed stage, section key when available,
@@ -242,7 +245,32 @@ markdown for auditability, then assembles intent-based documents:
 - `package_service_index.md`: package/service/workspace index;
 - `change_report.md`: recent history, kept separate from current architecture.
 
-The manifest is published as `manifest.schema-v2.json`. Its top level now has
-separate `documents[]` and `sections[]` arrays: documents describe reader-facing
-artifacts, while sections preserve generation metadata, section specs, source
-counts and per-section artifact links.
+During a run attempt the worker publishes draft reader-facing artifacts under:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/attempts/{attempt}/...
+```
+
+Draft artifacts use `draft_*` artifact kinds where they could otherwise be
+confused with final reader-facing outputs. This keeps failed attempts useful for
+debugging and diploma experiments without making them public/latest docs.
+
+Only a successful verification pass publishes stable artifacts under:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/documentation.md
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/{document_key}.md
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/manifest.schema-v2.json
+```
+
+The manifest is published as `manifest.schema-v2.json`. Its top level has
+separate `documents[]` and `sections[]` arrays: documents describe final
+reader-facing artifacts, while sections preserve generation metadata, section
+specs, source counts and per-section draft artifact links. RepositoryService
+stores `attempt` on every `documentation_artifacts` row, so attempts remain
+distinguishable in Postgres as well as in MinIO. Job-level retry currently uses
+a clean-attempt strategy: it reads previous attempt metadata, records the
+decision in `pipeline_trace`, and starts a new isolated attempt instead of
+mixing or reusing draft artifacts. Attempt artifacts are retained as audit and
+experiment material; cleanup can remove old attempts later, but final consumers
+should resolve only the stable manifest artifact recorded on a successful run.

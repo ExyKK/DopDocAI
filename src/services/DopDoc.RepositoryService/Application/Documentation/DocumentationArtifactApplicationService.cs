@@ -63,11 +63,13 @@ public sealed class DocumentationArtifactApplicationService
         var storageKey = NormalizeRequired(command.StorageKey, null, "documentation_artifact_storage_key_required");
         var contentType = NormalizeRequired(command.ContentType, 256, "documentation_artifact_content_type_required");
         var checksumSha256 = NormalizeSha256(command.ChecksumSha256);
+        var attempt = NormalizeAttempt(command.Attempt, run.Attempt);
 
         var artifact = await _db.DocumentationArtifacts
             .FirstOrDefaultAsync(
                 x => x.DocumentationRunId == documentationRunId &&
                      x.SectionId == (section == null ? null : section.Id) &&
+                     x.Attempt == attempt &&
                      x.ArtifactKind == artifactKind &&
                      x.SchemaVersion == command.SchemaVersion,
                 ct);
@@ -85,6 +87,7 @@ public sealed class DocumentationArtifactApplicationService
         }
 
         artifact.ArtifactKind = artifactKind;
+        artifact.Attempt = attempt;
         artifact.StorageBucket = storageBucket;
         artifact.StorageKey = storageKey;
         artifact.ContentType = contentType;
@@ -107,6 +110,31 @@ public sealed class DocumentationArtifactApplicationService
 
         await _db.SaveChangesAsync(ct);
         return artifact;
+    }
+
+    public async Task<IReadOnlyList<DocumentationArtifact>> ListAsync(
+        Guid documentationRunId,
+        int? attempt,
+        CancellationToken ct)
+    {
+        var exists = await _db.DocumentationRuns
+            .AnyAsync(x => x.Id == documentationRunId, ct);
+
+        if (!exists)
+            throw DocumentationRunNotFound(documentationRunId);
+
+        var query = _db.DocumentationArtifacts
+            .AsNoTracking()
+            .Where(x => x.DocumentationRunId == documentationRunId);
+
+        if (attempt is not null)
+            query = query.Where(x => x.Attempt == attempt.Value);
+
+        return await query
+            .OrderBy(x => x.Attempt)
+            .ThenBy(x => x.ArtifactKind)
+            .ThenBy(x => x.CreatedAt)
+            .ToListAsync(ct);
     }
 
     private static void ValidateCommand(RegisterDocumentationArtifactCommand command)
@@ -176,6 +204,26 @@ public sealed class DocumentationArtifactApplicationService
         }
 
         return normalized;
+    }
+
+    private static int NormalizeAttempt(int? requestedAttempt, int runAttempt)
+    {
+        var attempt = requestedAttempt ?? runAttempt;
+        if (attempt < 1)
+        {
+            throw new ValidationException(
+                "attempt must be greater than or equal to 1",
+                errorCode: "documentation_artifact_attempt_invalid");
+        }
+
+        if (attempt != runAttempt)
+        {
+            throw new ValidationException(
+                "documentation artifact attempt must match the running documentation run attempt",
+                errorCode: "documentation_artifact_attempt_mismatch");
+        }
+
+        return attempt;
     }
 
     private static NotFoundException DocumentationRunNotFound(Guid documentationRunId)

@@ -40,6 +40,18 @@ public static class DocumentationInternalEndpoints
         })
         .WithName("InternalRegisterDocumentationArtifact");
 
+        g.MapGet("/{documentation_run_id:guid}/artifacts", async (
+            [FromRoute(Name = "documentation_run_id")] Guid documentationRunId,
+            [FromQuery(Name = "attempt")] int? attempt,
+            DocumentationArtifactApplicationService artifacts,
+            CancellationToken ct) =>
+        {
+            var result = await artifacts.ListAsync(documentationRunId, attempt, ct);
+
+            return TypedResults.Ok(result.Select(DocumentationContractMapper.ToResponse).ToList());
+        })
+        .WithName("InternalListDocumentationArtifacts");
+
         return g;
     }
 }

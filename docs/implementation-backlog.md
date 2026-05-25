@@ -1004,7 +1004,7 @@
 - перегенерировать только секции с repairable `error` findings, используя original section markdown, `section_spec`, rendered evidence, allowed source ids и relevant verification findings;
 - запретить repair prompt добавлять факты вне evidence; unsupported/contradicted claims должны удаляться или заменяться honest unknown/partial statements;
 - после repair пересобирать affected intent-based documents, index `documentation.md` и `manifest.schema-v2.json`;
-- сохранять audit artifacts для попыток: `sections/{section_key}.attempt-{n}.md`, `repair_attempts.schema-v1.json`, final repaired section artifact;
+- сохранять audit artifacts для repair rounds: `sections/{section_key}.repair-{n}.md`, `repair_attempts.schema-v1.json`, final repaired section artifact;
 - ограничить loop safety guard'ом, например `max_repair_rounds=2`, и останавливать повторяющиеся unresolved findings;
 - hard fail оставить только после исчерпания repair rounds или при non-repairable errors вроде missing evidence / invalid judge contract / empty evidence pack.
 - Acceptance:
@@ -1016,7 +1016,7 @@
 - реализован bounded loop `generate -> verify -> repair -> verify` внутри documentation pipeline, управляется `DOPDOC_DOCS_MAX_REPAIR_ROUNDS`/`DOCS_MAX_REPAIR_ROUNDS` с default `2`;
 - `repair_plan.schema-v1.json` строится из repairable `error` findings, а non-repairable errors остаются unresolved и не маскируются повторной генерацией;
 - repair prompt получает original section markdown, `section_spec`, allowed source ids, source index, original prompt payload и relevant findings; пересобирается только проблемная секция;
-- публикуются audit artifacts `sections/{section_key}.attempt-{n}.md`, final section markdown, пересобранные intent-based documents, `repair_attempts.schema-v1.json`, final manifest v2.
+- repair audit artifacts теперь attempt-scoped после `DOCS-022`: `attempts/{attempt}/sections/{section_key}.repair-{n}.md`, draft section markdown, draft intent-based documents и `repair_attempts.schema-v1.json`; stable final docs/manifest публикуются только при successful verification.
 
 ### DOCS-008C — Усилить verification/repair через targeted evidence expansion
 - Priority: `P1`
@@ -1188,7 +1188,9 @@
 
 ### DOCS-022 — Сделать documentation artifacts attempt-scoped и resumable
 - Priority: `P1`
+- Status: `completed`
 - Depends on: `DOCS-020`, `DOCS-021`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
 - Goal: повторные job attempts не должны смешивать артефакты разных попыток и не должны без необходимости терять уже успешно созданные секции.
 - Tasks:
 - добавить attempt-aware artifact key convention, например `documentation-runs/{run_id}/attempts/{attempt}/...`, и финальные stable pointers/artifacts только после successful verification;
@@ -1202,6 +1204,12 @@
 - failed run не выглядит как успешная смесь секций и repair attempts из разных попыток;
 - public/latest documentation consumers не получают draft artifacts;
 - повторный attempt может reuse безопасные завершённые секции или явно начинает новую isolated attempt.
+- Notes:
+- RepositoryService теперь хранит `attempt` в `repo.documentation_artifacts`, возвращает его в artifact DTO и умеет list artifacts by documentation run/attempt;
+- documentation worker публикует draft/debug artifacts под `documentation-runs/{run_id}/attempts/{attempt}/...`;
+- draft reader-facing artifacts получают `draft_*` artifact kinds, а stable `documentation.md`, intent docs и `manifest.schema-v2.json` публикуются только после успешной verification;
+- job-level retry читает existing artifact state и явно выбирает `clean_attempt`, фиксируя решение в `pipeline_trace`;
+- добавлена EF migration `20260525000100_AddDocumentationArtifactAttempt`.
 
 ### DOCS-023 — Исправить classification и evidence scope для Go library/CLI репозиториев
 - Priority: `P0`

@@ -32,6 +32,8 @@ def test_generator_builds_intent_based_documents_and_manifest_levels() -> None:
         documentation_run_id="run-1",
         repository_id="repo-1",
         snapshot_id="snapshot-1",
+        attempt=2,
+        publication_state="final",
         template_kind="monorepo_web_app_handbook",
         sections=sections,
         section_artifacts=[{"artifact_kind": "section_markdown"} for _ in sections],
@@ -42,6 +44,8 @@ def test_generator_builds_intent_based_documents_and_manifest_levels() -> None:
 
     assert manifest["schema_version"] == 2
     assert manifest["artifact_kind"] == "documentation_manifest"
+    assert manifest["attempt"] == 2
+    assert manifest["publication_state"] == "final"
     assert manifest["documents"][0]["section_keys"]
     assert manifest["sections"][0]["section_spec"]["document_keys"] == ["repository_brief"]
 

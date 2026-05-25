@@ -119,6 +119,7 @@ class DocumentationGenerationPipeline:
             requested_template_kind=run.template_kind,
             attempt=run.attempt,
         )
+        self._record_attempt_state(run)
         try:
             return self._build_developer_handbook(run, report_progress=report_progress)
         except Exception as exc:
@@ -197,7 +198,7 @@ class DocumentationGenerationPipeline:
             run=run,
             artifact_kind="evidence_pack_manifest",
             section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/evidence_packs.schema-v1.json",
+            key=f"{_attempt_prefix(run)}/evidence_packs.schema-v1.json",
             payload=build_evidence_pack_manifest(
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
@@ -210,7 +211,7 @@ class DocumentationGenerationPipeline:
             run=run,
             artifact_kind="prompt_contract_manifest",
             section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/prompt_contracts.schema-v1.json",
+            key=f"{_attempt_prefix(run)}/prompt_contracts.schema-v1.json",
             payload=build_prompt_contract_manifest(
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
@@ -223,10 +224,7 @@ class DocumentationGenerationPipeline:
             run=run,
             artifact_kind="rendered_evidence_pack_manifest",
             section_key=None,
-            key=(
-                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
-                "/rendered_evidence_packs.schema-v1.json"
-            ),
+            key=f"{_attempt_prefix(run)}/rendered_evidence_packs.schema-v1.json",
             payload=build_rendered_evidence_pack_manifest(
                 documentation_run_id=run.id,
                 repository_id=run.repository_id,
@@ -286,6 +284,7 @@ class DocumentationGenerationPipeline:
             run=run,
             generated_sections=generated_sections,
             template_kind=effective_template_kind,
+            publication_state="draft",
         )
 
         verification_reports: list[VerificationReport] = []
@@ -400,12 +399,11 @@ class DocumentationGenerationPipeline:
                 )
                 attempt_artifact = self._publish_markdown(
                     run=run,
-                    artifact_kind=f"section_markdown_attempt_{plan.repair_round}",
+                    artifact_kind=f"draft_section_markdown_repair_{plan.repair_round}",
                     section_key=repaired.section_key,
                     key=(
-                        f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                        f"/documentation-runs/{run.id}/sections/"
-                        f"{repaired.section_key}.attempt-{plan.repair_round}.md"
+                        f"{_attempt_prefix(run)}/sections/"
+                        f"{repaired.section_key}.repair-{plan.repair_round}.md"
                     ),
                     markdown=repaired.content_markdown,
                 )
@@ -428,6 +426,7 @@ class DocumentationGenerationPipeline:
                 run=run,
                 generated_sections=generated_sections,
                 template_kind=effective_template_kind,
+                publication_state="draft",
             )
 
         final_report = verification_reports[-1]
@@ -435,10 +434,7 @@ class DocumentationGenerationPipeline:
             run=run,
             artifact_kind="verification_report",
             section_key=None,
-            key=(
-                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
-                "/verification_report.schema-v1.json"
-            ),
+            key=f"{_attempt_prefix(run)}/verification_report.schema-v1.json",
             payload=final_report.to_dict(),
         )
         repair_plan_artifact = None
@@ -447,10 +443,7 @@ class DocumentationGenerationPipeline:
                 run=run,
                 artifact_kind="repair_plan",
                 section_key=None,
-                key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
-                    "/repair_plan.schema-v1.json"
-                ),
+                key=f"{_attempt_prefix(run)}/repair_plan.schema-v1.json",
                 payload={
                     "schema_version": 1,
                     "artifact_kind": "repair_plan",
@@ -473,18 +466,11 @@ class DocumentationGenerationPipeline:
                 run=run,
                 artifact_kind="repair_attempts",
                 section_key=None,
-                key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
-                    "/repair_attempts.schema-v1.json"
-                ),
+                key=f"{_attempt_prefix(run)}/repair_attempts.schema-v1.json",
                 payload=repair_attempts_manifest,
             )
 
-        pipeline_trace_artifact = self._publish_pipeline_trace_safely(
-            run,
-            status="failed" if final_report.has_hard_errors() else "succeeded",
-        )
-        manifest = self._build_manifest(
+        draft_manifest = self._build_manifest(
             run=run,
             template_kind=effective_template_kind,
             template_selection=template_selection.to_dict(),
@@ -500,28 +486,66 @@ class DocumentationGenerationPipeline:
             repair_summary=(repair_attempts_manifest or {}).get("summary"),
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            publication_state="draft",
+        )
+        draft_manifest_artifact = self._publish_json(
+            run=run,
+            artifact_kind="draft_manifest",
+            section_key=None,
+            key=f"{_attempt_prefix(run)}/manifest.schema-v2.json",
+            payload=draft_manifest,
+            schema_version=2,
+        )
+
+        if final_report.has_hard_errors():
+            self._publish_pipeline_trace_safely(run, status="failed")
+            raise DocumentationVerificationError(
+                "Documentation verification failed after repair attempts.",
+                report=final_report.to_dict(),
+            )
+
+        final_bundle = self._publish_document_bundle(
+            run=run,
+            generated_sections=generated_sections,
+            template_kind=effective_template_kind,
+            publication_state="final",
+        )
+        pipeline_trace_artifact = self._publish_pipeline_trace_safely(run, status="succeeded")
+        manifest = self._build_manifest(
+            run=run,
+            template_kind=effective_template_kind,
+            template_selection=template_selection.to_dict(),
+            repository_classification=repository_classification.to_dict(),
+            generated_sections=generated_sections,
+            section_artifacts_by_key=section_artifacts_by_key,
+            bundle=final_bundle,
+            evidence_pack_artifact=evidence_pack_artifact,
+            prompt_contract_artifact=prompt_contract_artifact,
+            rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
+            verification_summary=final_report.summary(),
+            verification_report_artifact=verification_report_artifact,
+            repair_summary=(repair_attempts_manifest or {}).get("summary"),
+            repair_plan_artifact=repair_plan_artifact,
+            repair_attempts_artifact=repair_attempts_artifact,
             pipeline_trace_artifact=pipeline_trace_artifact,
+            draft_manifest_artifact=draft_manifest_artifact,
+            publication_state="final",
         )
         manifest_artifact = self._publish_json(
             run=run,
             artifact_kind="manifest",
             section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/manifest.schema-v2.json",
+            key=f"{_run_prefix(run)}/manifest.schema-v2.json",
             payload=manifest,
             schema_version=2,
         )
+        bundle = final_bundle
         report_progress(
             "publishing_artifacts",
             92,
             progress_current=len(section_artifacts_by_key) + len(bundle.document_artifacts) + 8,
             progress_total=len(section_artifacts_by_key) + len(bundle.document_artifacts) + 8,
         )
-
-        if final_report.has_hard_errors():
-            raise DocumentationVerificationError(
-                "Documentation verification failed after repair attempts.",
-                report=final_report.to_dict(),
-            )
 
         return DocumentationPlanResult(
             sections=sections,
@@ -588,6 +612,7 @@ class DocumentationGenerationPipeline:
                 "repair_plan_artifact": repair_plan_artifact,
                 "repair_attempts_artifact": repair_attempts_artifact,
                 "pipeline_trace_artifact": pipeline_trace_artifact,
+                "draft_manifest_artifact": draft_manifest_artifact,
                 "evidence_pack_artifact": evidence_pack_artifact,
                 "rendered_evidence_pack_artifact": rendered_evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
@@ -618,12 +643,9 @@ class DocumentationGenerationPipeline:
     ) -> dict[str, Any]:
         return self._publish_markdown(
             run=run,
-            artifact_kind="section_markdown",
+            artifact_kind="draft_section_markdown",
             section_key=section.section_key,
-            key=(
-                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                f"/documentation-runs/{run.id}/sections/{section.section_key}.md"
-            ),
+            key=f"{_attempt_prefix(run)}/sections/{section.section_key}.md",
             markdown=section.content_markdown,
         )
 
@@ -633,7 +655,13 @@ class DocumentationGenerationPipeline:
         run: ClaimedDocumentationRun,
         generated_sections: list[GeneratedSection],
         template_kind: str,
+        publication_state: str,
     ) -> _PublishedDocumentBundle:
+        if publication_state not in {"draft", "final"}:
+            raise ValueError(f"Unsupported documentation publication_state: {publication_state}")
+
+        prefix = _attempt_prefix(run) if publication_state == "draft" else _run_prefix(run)
+        artifact_prefix = "draft_" if publication_state == "draft" else ""
         generated_documents = self._generator.assemble_documents(
             generated_sections,
             template_kind=template_kind,
@@ -643,12 +671,9 @@ class DocumentationGenerationPipeline:
             document_artifacts.append(
                 self._publish_markdown(
                     run=run,
-                    artifact_kind=document.artifact_kind,
+                    artifact_kind=f"{artifact_prefix}{document.artifact_kind}",
                     section_key=None,
-                    key=(
-                        f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                        f"/documentation-runs/{run.id}/{document.file_name}"
-                    ),
+                    key=f"{prefix}/{document.file_name}",
                     markdown=document.content_markdown,
                 )
             )
@@ -660,9 +685,9 @@ class DocumentationGenerationPipeline:
         )
         documentation_artifact = self._publish_markdown(
             run=run,
-            artifact_kind="documentation_markdown",
+            artifact_kind=f"{artifact_prefix}documentation_markdown",
             section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/documentation.md",
+            key=f"{prefix}/documentation.md",
             markdown=document_markdown,
         )
         return _PublishedDocumentBundle(
@@ -690,11 +715,15 @@ class DocumentationGenerationPipeline:
         repair_plan_artifact: dict[str, Any] | None = None,
         repair_attempts_artifact: dict[str, Any] | None = None,
         pipeline_trace_artifact: dict[str, Any] | None = None,
+        draft_manifest_artifact: dict[str, Any] | None = None,
+        publication_state: str = "draft",
     ) -> dict[str, Any]:
         return self._generator.build_manifest(
             documentation_run_id=run.id,
             repository_id=run.repository_id,
             snapshot_id=run.snapshot_id,
+            attempt=run.attempt,
+            publication_state=publication_state,
             template_kind=template_kind,
             requested_template_kind=run.template_kind,
             template_selection=template_selection,
@@ -716,6 +745,7 @@ class DocumentationGenerationPipeline:
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
             pipeline_trace_artifact=pipeline_trace_artifact,
+            draft_manifest_artifact=draft_manifest_artifact,
         )
 
     def _publish_markdown(
@@ -783,6 +813,7 @@ class DocumentationGenerationPipeline:
             {
                 "artifact_kind": artifact_kind,
                 "section_key": section_key,
+                "attempt": run.attempt,
                 "storage_bucket": self._storage.bucket,
                 "storage_key": key,
                 "content_type": content_type,
@@ -795,6 +826,7 @@ class DocumentationGenerationPipeline:
         summary = {
             "artifact_kind": artifact_kind,
             "section_key": section_key,
+            "attempt": run.attempt,
             "storage_key": key,
             "schema_version": schema_version,
             "size_bytes": len(payload),
@@ -834,6 +866,41 @@ class DocumentationGenerationPipeline:
     def _record_trace(self, event_type: str, **fields: Any) -> None:
         if self._trace is not None:
             self._trace.record(event_type, **fields)
+
+    def _record_attempt_state(self, run: ClaimedDocumentationRun) -> None:
+        artifacts = self._repository_service.list_documentation_artifacts(run.id)
+        previous_attempts = sorted(
+            {
+                artifact.attempt
+                for artifact in artifacts
+                if artifact.attempt < run.attempt
+            }
+        )
+        current_attempt_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.attempt == run.attempt
+        ]
+        logger.info(
+            (
+                "Documentation attempt state loaded documentation_run_id=%s attempt=%s "
+                "previous_attempts=%s current_attempt_artifacts=%s resume_strategy=%s"
+            ),
+            run.id,
+            run.attempt,
+            previous_attempts,
+            len(current_attempt_artifacts),
+            "clean_attempt",
+        )
+        self._record_trace(
+            "attempt_state_loaded",
+            attempt=run.attempt,
+            previous_attempts=previous_attempts,
+            previous_attempts_total=len(previous_attempts),
+            current_attempt_artifacts_total=len(current_attempt_artifacts),
+            resume_strategy="clean_attempt",
+            resume_reason="attempt artifacts are isolated; safe section reuse is deferred",
+        )
 
     def _record_template_selection(
         self,
@@ -954,8 +1021,7 @@ class DocumentationGenerationPipeline:
                 artifact_kind="pipeline_trace",
                 section_key=None,
                 key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                    f"/documentation-runs/{run.id}/pipeline_trace.schema-v1.json"
+                    f"{_attempt_prefix(run)}/pipeline_trace.schema-v1.json"
                 ),
                 payload=self._trace.to_dict(status=status),
                 record_trace=False,
@@ -1016,8 +1082,7 @@ class DocumentationGenerationPipeline:
                 artifact_kind="pipeline_error",
                 section_key=section_key,
                 key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                    f"/documentation-runs/{run.id}/pipeline_error.schema-v1.json"
+                    f"{_attempt_prefix(run)}/pipeline_error.schema-v1.json"
                 ),
                 payload=payload,
             )
@@ -1044,8 +1109,7 @@ class DocumentationGenerationPipeline:
                 artifact_kind="generation_error_manifest",
                 section_key=None,
                 key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                    f"/documentation-runs/{run.id}/generation_errors.schema-v1.json"
+                    f"{_attempt_prefix(run)}/generation_errors.schema-v1.json"
                 ),
                 payload={
                     "schema_version": 1,
@@ -1053,6 +1117,7 @@ class DocumentationGenerationPipeline:
                     "documentation_run_id": run.id,
                     "repository_id": run.repository_id,
                     "snapshot_id": run.snapshot_id,
+                    "attempt": run.attempt,
                     "template_kind": template_kind,
                     "requested_template_kind": run.template_kind,
                     "completed_sections": [
@@ -1156,6 +1221,17 @@ def _truncate(value: str, max_length: int) -> str:
     if not value:
         return ""
     return value if len(value) <= max_length else value[:max_length]
+
+
+def _run_prefix(run: ClaimedDocumentationRun) -> str:
+    return (
+        f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+        f"/documentation-runs/{run.id}"
+    )
+
+
+def _attempt_prefix(run: ClaimedDocumentationRun) -> str:
+    return f"{_run_prefix(run)}/attempts/{run.attempt}"
 
 
 def _section_by_key(
