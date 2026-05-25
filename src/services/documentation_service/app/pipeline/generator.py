@@ -124,6 +124,11 @@ class DeveloperHandbookGenerator:
         evidence_pack_artifact: dict[str, Any] | None = None,
         rendered_evidence_pack_artifact: dict[str, Any] | None = None,
         prompt_contract_artifact: dict[str, Any] | None = None,
+        verification_summary: dict[str, Any] | None = None,
+        verification_report_artifact: dict[str, Any] | None = None,
+        repair_summary: dict[str, Any] | None = None,
+        repair_plan_artifact: dict[str, Any] | None = None,
+        repair_attempts_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "schema_version": 2,
@@ -163,6 +168,11 @@ class DeveloperHandbookGenerator:
             "evidence_pack_manifest": evidence_pack_artifact,
             "rendered_evidence_pack_manifest": rendered_evidence_pack_artifact,
             "prompt_contract_manifest": prompt_contract_artifact,
+            "verification_summary": verification_summary,
+            "verification_report": verification_report_artifact,
+            "repair_summary": repair_summary,
+            "repair_plan": repair_plan_artifact,
+            "repair_attempts": repair_attempts_artifact,
         }
 
 

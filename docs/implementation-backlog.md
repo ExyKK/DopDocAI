@@ -964,17 +964,59 @@
 - Acceptance:
 - по двум snapshot можно получить readable change summary с источниками.
 
-### DOCS-008 — Реализовать verification pipeline
+### DOCS-008 — Реализовать LLM-assisted verification pipeline
 - Priority: `P0`
-- Depends on: `DOCS-004`
-- Goal: документация должна проходить проверку before publish.
+- Status: `completed`
+- Depends on: `DOCS-012`, `DOCS-017`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
+- Goal: документация должна проходить серьёзную проверку качества, groundedness и полезности before successful completion.
 - Tasks:
-- проверять supported claims и наличие source refs;
-- проверять консистентность sections;
-- сохранять `verification_report.json`;
-- переводить run в `published` только при успешной проверке.
+- добавить deterministic preflight: manifest v2 integrity, documents/sections/artifacts consistency, unknown citations, empty sections, unfinished markdown/code fences, raw JSON dumps;
+- добавить configurable verification mode: `deterministic`, `llm`, `hybrid`, где production-like режим использует `hybrid`;
+- определить structured LLM judge contract с JSON response schema для section-level и document-set-level verdicts;
+- для каждой секции проверять groundedness claims against rendered evidence/source ids: `supported`, `partially_supported`, `unsupported`, `contradicted`, `not_enough_evidence`;
+- проверять section usefulness against `section_spec`: coverage of `must_cover`, соблюдение `avoid`, actionable details, отсутствие inventory-пересказа;
+- проверить cross-document quality: brief не перегружен reference details, onboarding содержит практические шаги, architecture/reference/change_report не смешивают intent;
+- отдельно проверять commit-history safety: SHA/commit-derived claims должны жить в `change_report`, а historical deletion не должен превращаться в current-state claim без evidence;
+- сохранять `verification_report.schema-v1.json` с deterministic findings, LLM judge verdicts, scores, severities, evidence references и suggested fixes;
+- добавлять `verification_summary` в run summary/manifest; hard errors fail run, warnings mark run as succeeded with degraded verification status.
 - Acceptance:
-- docs run не публикуется как успешный без verification.
+- каждый successful docs run имеет verification report и machine-readable summary;
+- unsupported/contradicted technical claims по files/APIs/commands/config приводят к failed run;
+- weak usefulness, duplication или missing `must_cover` приводят к warnings/degraded status, а не молча проходят;
+- LLM judge output строго валидируется по schema и при невалидном ответе даёт retryable verification failure;
+- verification можно запустить в deterministic-only mode для дешёвых smoke runs.
+- Notes:
+- реализован `DocumentationVerifier` с режимами `deterministic`, `llm`, `hybrid`; production-like default в compose/env — `hybrid`, а `stub` LLM автоматически использует deterministic-only verification для smoke runs;
+- deterministic checks покрывают manifest v2, documents/sections, unknown citations, missing body citations, short sections, raw JSON dumps, unclosed code fences, `finish_reason=length` и commit-hash leakage вне `change_report`;
+- LLM judge вызывается на каждую секцию и на весь document set, возвращает strict JSON findings/scores/call metadata, а невалидный JSON помечается как retryable `verification_judge_invalid_response`;
+- финальный `verification_report.schema-v1.json` и `verification_summary` публикуются в MinIO/manifest/run summary; hard errors fail run после repair attempts.
+
+### DOCS-008B — Добавить repair loop по verification findings
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-008`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
+- Goal: verification должна не только валить результат, но и давать системе шанс автоматически исправить repairable quality errors без полного перезапуска run.
+- Tasks:
+- добавить controlled loop `generate -> verify -> repair -> verify`, отдельный от технических job retries;
+- строить `repair_plan.schema-v1.json` из verification findings: проблемные секции, repairable errors, required fixes, unresolved/non-repairable findings;
+- перегенерировать только секции с repairable `error` findings, используя original section markdown, `section_spec`, rendered evidence, allowed source ids и relevant verification findings;
+- запретить repair prompt добавлять факты вне evidence; unsupported/contradicted claims должны удаляться или заменяться honest unknown/partial statements;
+- после repair пересобирать affected intent-based documents, index `documentation.md` и `manifest.schema-v2.json`;
+- сохранять audit artifacts для попыток: `sections/{section_key}.attempt-{n}.md`, `repair_attempts.schema-v1.json`, final repaired section artifact;
+- ограничить loop safety guard'ом, например `max_repair_rounds=2`, и останавливать повторяющиеся unresolved findings;
+- hard fail оставить только после исчерпания repair rounds или при non-repairable errors вроде missing evidence / invalid judge contract / empty evidence pack.
+- Acceptance:
+- unknown citations, unsupported claims, wrong-scope text и markdown defects могут быть исправлены без полной регенерации всех секций;
+- final report показывает repair rounds, repaired sections и unresolved findings;
+- job retry не используется для quality repair, а только для технических retryable failures;
+- repair loop не может уйти в бесконечную генерацию.
+- Notes:
+- реализован bounded loop `generate -> verify -> repair -> verify` внутри documentation pipeline, управляется `DOPDOC_DOCS_MAX_REPAIR_ROUNDS`/`DOCS_MAX_REPAIR_ROUNDS` с default `2`;
+- `repair_plan.schema-v1.json` строится из repairable `error` findings, а non-repairable errors остаются unresolved и не маскируются повторной генерацией;
+- repair prompt получает original section markdown, `section_spec`, allowed source ids, source index, original prompt payload и relevant findings; пересобирается только проблемная секция;
+- публикуются audit artifacts `sections/{section_key}.attempt-{n}.md`, final section markdown, пересобранные intent-based documents, `repair_attempts.schema-v1.json`, final manifest v2.
 
 ### DOCS-009 — Ввести token-budgeted evidence packs
 - Priority: `P0`
@@ -1056,20 +1098,35 @@
 - manifest и run summary сохраняют provider/model/usage/finish_reason/latency per section;
 - при ошибке генерации публикуется `generation_errors.schema-v1.json`, а retryable LLM ошибки возвращают run в `queued`, если попытки ещё доступны.
 
-### DOCS-013 — Добавить LLM cost controls и экспериментальную оценку качества
+### DOCS-013 — Добавить LLM usage accounting и экспериментальную оценку качества
 - Priority: `P1`
-- Depends on: `DOCS-012`
-- Goal: дипломные эксперименты должны быть воспроизводимыми и не сжигать бюджет незаметно.
+- Depends on: `DOCS-012`, `DOCS-008`, `DOCS-008B`
+- Goal: дипломные эксперименты должны быть воспроизводимыми: по каждому run должно быть видно, сколько стоили generation/verification и какое качество получилось.
 - Tasks:
-- считать estimated/actual input/output tokens и примерную стоимость run;
-- добавить per-run caps: max sections, max input tokens, max output tokens, max estimated USD;
-- логировать provider/model/pricing snapshot, чтобы результаты экспериментов можно было объяснить;
-- подготовить небольшой evaluation checklist для generated docs: coverage, groundedness, source quality, readability;
-- сохранить результаты ручных прогонов для `cobra` и `image-board` как baseline notes.
+- считать actual input/output tokens для generation и verification отдельно;
+- считать repair round usage отдельно от первичной generation;
+- считать примерную стоимость run по provider/model/pricing snapshot, без блокирующих лимитов на этом этапе;
+- логировать provider/model/pricing snapshot и verification mode, чтобы результаты экспериментов можно было объяснить;
+- собрать evaluation summary из `verification_report`: groundedness, usefulness, coverage, source quality, readability, duplication, wrong-scope findings;
+- сохранить результаты ручных прогонов для `cobra` и `image-board` как baseline notes/table;
+- добавить минимальную структуру для сравнения моделей/настроек в дипломных экспериментах.
 - Acceptance:
-- перед запуском можно ограничить стоимость одного documentation run;
-- после запуска видно, сколько стоила каждая секция и весь документ;
-- есть минимальная таблица сравнения моделей/настроек для диплома.
+- после запуска видно, сколько стоили generation, verification и repair по секциям/документам и всему run;
+- verification summary можно использовать как baseline quality table для диплома;
+- отсутствие pricing metadata не ломает run, но явно помечается как unknown cost.
+
+### DOCS-019 — Добавить optional per-run caps и budget guardrails
+- Priority: `P2`
+- Depends on: `DOCS-013`
+- Goal: позже добавить управляемые лимиты стоимости/объёма без блокировки текущего перехода к качественной генерации и verification.
+- Tasks:
+- добавить per-run caps: max sections, max input tokens, max output tokens, max judge calls, max estimated USD;
+- добавить fail-fast preflight по estimated budget до внешних LLM calls;
+- добавить настройки soft/hard cap behavior для локальных экспериментов;
+- отразить budget cap hits в run summary и verification/evaluation artifacts.
+- Acceptance:
+- можно явно ограничить стоимость одного documentation run;
+- cap violations объяснимы и не оставляют run без diagnostics.
 
 ### DOCS-014 — Добавить hygiene post-processing и source appendix
 - Priority: `P0`

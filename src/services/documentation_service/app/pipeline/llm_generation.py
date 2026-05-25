@@ -1,3 +1,4 @@
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -60,6 +61,117 @@ class LlmSectionGenerator:
             ),
             metadata=metadata,
         )
+
+    def repair_section(
+        self,
+        contract: SectionPromptContract,
+        *,
+        current_markdown: str,
+        findings: list[dict[str, Any]],
+        repair_round: int,
+    ) -> SectionGenerationOutput:
+        result = self._provider.generate(
+            _repair_messages(
+                contract,
+                current_markdown=current_markdown,
+                findings=findings,
+                repair_round=repair_round,
+            ),
+            metadata={
+                "task": "documentation_section_repair",
+                "section_key": contract.section_key,
+                "template_kind": contract.template_kind,
+                "repair_round": str(repair_round),
+            },
+        )
+        metadata: dict[str, object] = {
+            "provider": result.provider,
+            "model": result.model,
+            "finish_reason": result.finish_reason,
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.total_tokens,
+            "latency_ms": result.latency_ms,
+            "response_id": result.response_id,
+            "prompt_version": contract.schema_version,
+            "repair_round": repair_round,
+            "repair_findings_total": len(findings),
+        }
+        processed_markdown, warnings = _post_process_section_markdown(
+            result.content,
+            contract.title,
+            source_index=contract.source_index,
+            finish_reason=result.finish_reason,
+        )
+        metadata["warnings"] = warnings
+        metadata["quality_status"] = _quality_status(warnings)
+        return SectionGenerationOutput(
+            section=GeneratedSection(
+                section_key=contract.section_key,
+                title=contract.title,
+                ordinal=contract.ordinal,
+                content_markdown=processed_markdown,
+                source_count=len(contract.source_ids),
+                generation=metadata,
+                section_spec=contract.section_spec,
+            ),
+            metadata=metadata,
+        )
+
+
+def _repair_messages(
+    contract: SectionPromptContract,
+    *,
+    current_markdown: str,
+    findings: list[dict[str, Any]],
+    repair_round: int,
+) -> list[LlmMessage]:
+    payload = {
+        "task": "Repair one generated documentation section.",
+        "repair_round": repair_round,
+        "section": {
+            "key": contract.section_key,
+            "title": contract.title,
+            "ordinal": contract.ordinal,
+        },
+        "section_spec": contract.section_spec,
+        "allowed_source_ids": contract.source_ids,
+        "source_index": contract.source_index,
+        "current_markdown": current_markdown,
+        "verification_findings": findings,
+        "original_prompt_payload": contract.messages[-1].content,
+    }
+    return [
+        LlmMessage(
+            role="system",
+            content=(
+                "You are DopDocAI's documentation repairer. "
+                "Revise a single generated section using only the provided evidence and findings."
+            ),
+        ),
+        LlmMessage(
+            role="developer",
+            content="\n".join(
+                [
+                    "Return the section body only; do not include a heading or sources appendix.",
+                    "Fix every verification finding that is repairable.",
+                    "Remove unsupported or contradicted claims instead of trying to justify them.",
+                    "Do not add facts, files, commands, APIs, dependencies or configuration outside the provided evidence.",
+                    "Use only allowed source ids in citations.",
+                    "If evidence is missing, state that explicitly and keep the section partial.",
+                    "Keep the section focused on section_spec and avoid neighboring document intents.",
+                ]
+            ),
+        ),
+        LlmMessage(
+            role="user",
+            content=json_dumps(payload),
+        ),
+    ]
+
+
+def json_dumps(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str)
 
 
 def _post_process_section_markdown(

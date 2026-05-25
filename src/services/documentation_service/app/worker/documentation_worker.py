@@ -275,6 +275,8 @@ def _planning_pipeline():
             max_sources=settings.evidence_pack_max_sources,
         ),
         prompt_output_language=settings.prompt_output_language,
+        verification_mode=settings.verification_mode,
+        max_repair_rounds=settings.max_repair_rounds,
     )
 
 
@@ -284,6 +286,9 @@ def _map_error_code(exc: Exception) -> str:
 
     if exc.__class__.__name__ == "LlmProviderError":
         return getattr(exc, "error_code", "llm_provider_failed")
+
+    if exc.__class__.__name__ == "DocumentationVerificationError":
+        return getattr(exc, "error_code", "documentation_verification_failed")
 
     if exc.__class__.__name__ == "ObjectStorageError":
         return "artifact_publish_failed"

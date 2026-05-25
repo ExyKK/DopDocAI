@@ -15,7 +15,7 @@ from app.pipeline.evidence_pack import (
     EvidencePackBudget,
     build_evidence_pack_manifest,
 )
-from app.pipeline.generator import DeveloperHandbookGenerator, GeneratedSection
+from app.pipeline.generator import DeveloperHandbookGenerator, GeneratedDocument, GeneratedSection
 from app.pipeline.llm_generation import LlmSectionGenerator
 from app.pipeline.prompt_contract import (
     SectionPromptContract,
@@ -26,7 +26,14 @@ from app.pipeline.rendered_evidence import (
     RenderedEvidencePack,
     build_rendered_evidence_pack_manifest,
 )
+from app.pipeline.repair import RepairPlan, build_repair_attempts_manifest, build_repair_plan
 from app.pipeline.templates import get_section_templates, select_documentation_template
+from app.pipeline.verification import (
+    DocumentationVerificationError,
+    DocumentationVerifier,
+    VerificationMode,
+    VerificationReport,
+)
 from app.worker.job_store import ClaimedDocumentationRun
 
 REQUIRED_ANALYSIS_ARTIFACTS = (
@@ -45,6 +52,13 @@ class DocumentationPlanResult:
     summary: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _PublishedDocumentBundle:
+    documents: list[GeneratedDocument]
+    document_artifacts: list[dict[str, Any]]
+    documentation_artifact: dict[str, Any]
+
+
 class DocumentationGenerationPipeline:
     def __init__(
         self,
@@ -55,13 +69,17 @@ class DocumentationGenerationPipeline:
         llm_provider: LlmCompletionProvider,
         evidence_pack_budget: EvidencePackBudget | None = None,
         prompt_output_language: str = "ru",
+        verification_mode: VerificationMode = "hybrid",
+        max_repair_rounds: int = 2,
     ):
         self._repository_service = repository_service
         self._storage = storage
         self._planner = EvidencePlanner(retrieval, budget=evidence_pack_budget)
         self._generator = DeveloperHandbookGenerator()
         self._section_generator = LlmSectionGenerator(llm_provider)
+        self._verifier = DocumentationVerifier(llm_provider, mode=verification_mode)
         self._prompt_output_language = prompt_output_language
+        self._max_repair_rounds = max(0, max_repair_rounds)
 
     def build_developer_handbook(
         self,
@@ -143,7 +161,7 @@ class DocumentationGenerationPipeline:
 
         report_progress("generating_sections", 78, progress_current=0, progress_total=len(sections))
         generated_sections: list[GeneratedSection] = []
-        section_artifacts: list[dict[str, Any]] = []
+        section_artifacts_by_key: dict[str, dict[str, Any]] = {}
         for index, contract in enumerate(prompt_contracts, start=1):
             try:
                 generated = self._section_generator.generate_section(contract)
@@ -159,63 +177,178 @@ class DocumentationGenerationPipeline:
 
             section = generated.section
             generated_sections.append(section)
-            artifact = self._publish_markdown(
-                run=run,
-                artifact_kind="section_markdown",
-                section_key=section.section_key,
-                key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/sections/{section.section_key}.md",
-                markdown=section.content_markdown,
-            )
-            section_artifacts.append(artifact)
+            section_artifacts_by_key[section.section_key] = self._publish_section_markdown(run, section)
             report_progress("generating_sections", 78, progress_current=index, progress_total=len(sections))
 
-        generated_documents = self._generator.assemble_documents(
-            generated_sections,
+        bundle = self._publish_document_bundle(
+            run=run,
+            generated_sections=generated_sections,
             template_kind=effective_template_kind,
         )
-        document_artifacts: list[dict[str, Any]] = []
-        for document in generated_documents:
-            artifact = self._publish_markdown(
+
+        verification_reports: list[VerificationReport] = []
+        repair_plans: list[RepairPlan] = []
+        repair_attempts: list[dict[str, Any]] = []
+        contract_by_section = {contract.section_key: contract for contract in prompt_contracts}
+
+        for repair_round in range(self._max_repair_rounds + 1):
+            report_progress(
+                "verifying_documentation",
+                86,
+                progress_current=repair_round,
+                progress_total=self._max_repair_rounds + 1,
+            )
+            current_manifest = self._build_manifest(
                 run=run,
-                artifact_kind=document.artifact_kind,
+                template_kind=effective_template_kind,
+                template_selection=template_selection.to_dict(),
+                repository_classification=repository_classification.to_dict(),
+                generated_sections=generated_sections,
+                section_artifacts_by_key=section_artifacts_by_key,
+                bundle=bundle,
+                evidence_pack_artifact=evidence_pack_artifact,
+                prompt_contract_artifact=prompt_contract_artifact,
+                rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
+            )
+            report = self._verifier.verify(
+                documentation_run_id=run.id,
+                repository_id=run.repository_id,
+                snapshot_id=run.snapshot_id,
+                template_kind=effective_template_kind,
+                requested_template_kind=run.template_kind,
+                sections=generated_sections,
+                documents=bundle.documents,
+                manifest=current_manifest,
+                contracts=prompt_contracts,
+                repair_round=repair_round,
+            )
+            verification_reports.append(report)
+            if not report.has_hard_errors():
+                break
+            if repair_round >= self._max_repair_rounds:
+                break
+
+            plan = build_repair_plan(report)
+            repair_plans.append(plan)
+            if not plan.has_repairs() or plan.unresolved_findings:
+                break
+
+            report_progress(
+                "repairing_documentation",
+                88,
+                progress_current=repair_round + 1,
+                progress_total=self._max_repair_rounds,
+            )
+            for section_plan in plan.sections:
+                contract = contract_by_section.get(section_plan.section_key)
+                current_section = _section_by_key(generated_sections, section_plan.section_key)
+                if contract is None or current_section is None:
+                    continue
+
+                repaired = self._section_generator.repair_section(
+                    contract,
+                    current_markdown=current_section.content_markdown,
+                    findings=[finding.to_dict() for finding in section_plan.findings],
+                    repair_round=plan.repair_round,
+                ).section
+                attempt_artifact = self._publish_markdown(
+                    run=run,
+                    artifact_kind=f"section_markdown_attempt_{plan.repair_round}",
+                    section_key=repaired.section_key,
+                    key=(
+                        f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                        f"/documentation-runs/{run.id}/sections/"
+                        f"{repaired.section_key}.attempt-{plan.repair_round}.md"
+                    ),
+                    markdown=repaired.content_markdown,
+                )
+                repair_attempts.append(
+                    {
+                        "repair_round": plan.repair_round,
+                        "section_key": repaired.section_key,
+                        "findings": [finding.to_dict() for finding in section_plan.findings],
+                        "artifact": attempt_artifact,
+                        "generation": repaired.generation,
+                    }
+                )
+                _replace_section(generated_sections, repaired)
+                section_artifacts_by_key[repaired.section_key] = self._publish_section_markdown(
+                    run,
+                    repaired,
+                )
+
+            bundle = self._publish_document_bundle(
+                run=run,
+                generated_sections=generated_sections,
+                template_kind=effective_template_kind,
+            )
+
+        final_report = verification_reports[-1]
+        verification_report_artifact = self._publish_json(
+            run=run,
+            artifact_kind="verification_report",
+            section_key=None,
+            key=(
+                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
+                "/verification_report.schema-v1.json"
+            ),
+            payload=final_report.to_dict(),
+        )
+        repair_plan_artifact = None
+        if repair_plans:
+            repair_plan_artifact = self._publish_json(
+                run=run,
+                artifact_kind="repair_plan",
                 section_key=None,
                 key=(
-                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
-                    f"/documentation-runs/{run.id}/{document.file_name}"
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
+                    "/repair_plan.schema-v1.json"
                 ),
-                markdown=document.content_markdown,
+                payload={
+                    "schema_version": 1,
+                    "artifact_kind": "repair_plan",
+                    "documentation_run_id": run.id,
+                    "plans": [plan.to_dict() for plan in repair_plans],
+                },
             )
-            document_artifacts.append(artifact)
+        repair_attempts_artifact = None
+        repair_attempts_manifest = None
+        if repair_attempts or repair_plans:
+            repair_attempts_manifest = build_repair_attempts_manifest(
+                documentation_run_id=run.id,
+                repository_id=run.repository_id,
+                snapshot_id=run.snapshot_id,
+                attempts=repair_attempts,
+                plans=repair_plans,
+                final_report=final_report,
+            )
+            repair_attempts_artifact = self._publish_json(
+                run=run,
+                artifact_kind="repair_attempts",
+                section_key=None,
+                key=(
+                    f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}"
+                    "/repair_attempts.schema-v1.json"
+                ),
+                payload=repair_attempts_manifest,
+            )
 
-        document_markdown = self._generator.assemble_index_document(
-            generated_documents,
-            sections=generated_sections,
-            template_kind=effective_template_kind,
-        )
-        documentation_artifact = self._publish_markdown(
+        manifest = self._build_manifest(
             run=run,
-            artifact_kind="documentation_markdown",
-            section_key=None,
-            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/documentation.md",
-            markdown=document_markdown,
-        )
-
-        manifest = self._generator.build_manifest(
-            documentation_run_id=run.id,
-            repository_id=run.repository_id,
-            snapshot_id=run.snapshot_id,
             template_kind=effective_template_kind,
-            requested_template_kind=run.template_kind,
             template_selection=template_selection.to_dict(),
             repository_classification=repository_classification.to_dict(),
-            sections=generated_sections,
-            section_artifacts=section_artifacts,
-            documents=generated_documents,
-            document_artifacts=document_artifacts,
-            documentation_artifact=documentation_artifact,
+            generated_sections=generated_sections,
+            section_artifacts_by_key=section_artifacts_by_key,
+            bundle=bundle,
             evidence_pack_artifact=evidence_pack_artifact,
             prompt_contract_artifact=prompt_contract_artifact,
             rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
+            verification_summary=final_report.summary(),
+            verification_report_artifact=verification_report_artifact,
+            repair_summary=(repair_attempts_manifest or {}).get("summary"),
+            repair_plan_artifact=repair_plan_artifact,
+            repair_attempts_artifact=repair_attempts_artifact,
         )
         manifest_artifact = self._publish_json(
             run=run,
@@ -228,9 +361,15 @@ class DocumentationGenerationPipeline:
         report_progress(
             "publishing_artifacts",
             92,
-            progress_current=len(section_artifacts) + len(document_artifacts) + 5,
-            progress_total=len(section_artifacts) + len(document_artifacts) + 5,
+            progress_current=len(section_artifacts_by_key) + len(bundle.document_artifacts) + 8,
+            progress_total=len(section_artifacts_by_key) + len(bundle.document_artifacts) + 8,
         )
+
+        if final_report.has_hard_errors():
+            raise DocumentationVerificationError(
+                "Documentation verification failed after repair attempts.",
+                report=final_report.to_dict(),
+            )
 
         return DocumentationPlanResult(
             sections=sections,
@@ -280,7 +419,7 @@ class DocumentationGenerationPipeline:
                     for section in sections
                 },
                 "generated_sections_total": len(generated_sections),
-                "generated_documents_total": len(generated_documents),
+                "generated_documents_total": len(bundle.documents),
                 "generated_documents": [
                     {
                         "document_key": document.document_key,
@@ -288,14 +427,19 @@ class DocumentationGenerationPipeline:
                         "file_name": document.file_name,
                         "section_keys": list(document.section_keys),
                     }
-                    for document in generated_documents
+                    for document in bundle.documents
                 ],
                 "generation_summary": _generation_summary(generated_sections),
+                "verification_summary": final_report.summary(),
+                "verification_report_artifact": verification_report_artifact,
+                "repair_summary": (repair_attempts_manifest or {}).get("summary"),
+                "repair_plan_artifact": repair_plan_artifact,
+                "repair_attempts_artifact": repair_attempts_artifact,
                 "evidence_pack_artifact": evidence_pack_artifact,
                 "rendered_evidence_pack_artifact": rendered_evidence_pack_artifact,
                 "prompt_contract_artifact": prompt_contract_artifact,
-                "documentation_artifact": documentation_artifact,
-                "document_artifacts": document_artifacts,
+                "documentation_artifact": bundle.documentation_artifact,
+                "document_artifacts": bundle.document_artifacts,
                 "manifest_artifact": manifest_artifact,
             },
         )
@@ -313,6 +457,111 @@ class DocumentationGenerationPipeline:
             for kind, ref in refs.items()
             if kind in REQUIRED_ANALYSIS_ARTIFACTS
         }
+
+    def _publish_section_markdown(
+        self,
+        run: ClaimedDocumentationRun,
+        section: GeneratedSection,
+    ) -> dict[str, Any]:
+        return self._publish_markdown(
+            run=run,
+            artifact_kind="section_markdown",
+            section_key=section.section_key,
+            key=(
+                f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                f"/documentation-runs/{run.id}/sections/{section.section_key}.md"
+            ),
+            markdown=section.content_markdown,
+        )
+
+    def _publish_document_bundle(
+        self,
+        *,
+        run: ClaimedDocumentationRun,
+        generated_sections: list[GeneratedSection],
+        template_kind: str,
+    ) -> _PublishedDocumentBundle:
+        generated_documents = self._generator.assemble_documents(
+            generated_sections,
+            template_kind=template_kind,
+        )
+        document_artifacts: list[dict[str, Any]] = []
+        for document in generated_documents:
+            document_artifacts.append(
+                self._publish_markdown(
+                    run=run,
+                    artifact_kind=document.artifact_kind,
+                    section_key=None,
+                    key=(
+                        f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}"
+                        f"/documentation-runs/{run.id}/{document.file_name}"
+                    ),
+                    markdown=document.content_markdown,
+                )
+            )
+
+        document_markdown = self._generator.assemble_index_document(
+            generated_documents,
+            sections=generated_sections,
+            template_kind=template_kind,
+        )
+        documentation_artifact = self._publish_markdown(
+            run=run,
+            artifact_kind="documentation_markdown",
+            section_key=None,
+            key=f"repositories/{run.repository_id}/snapshots/{run.snapshot_id}/documentation-runs/{run.id}/documentation.md",
+            markdown=document_markdown,
+        )
+        return _PublishedDocumentBundle(
+            documents=generated_documents,
+            document_artifacts=document_artifacts,
+            documentation_artifact=documentation_artifact,
+        )
+
+    def _build_manifest(
+        self,
+        *,
+        run: ClaimedDocumentationRun,
+        template_kind: str,
+        template_selection: dict[str, Any],
+        repository_classification: dict[str, Any],
+        generated_sections: list[GeneratedSection],
+        section_artifacts_by_key: dict[str, dict[str, Any]],
+        bundle: _PublishedDocumentBundle,
+        evidence_pack_artifact: dict[str, Any],
+        prompt_contract_artifact: dict[str, Any],
+        rendered_evidence_pack_artifact: dict[str, Any],
+        verification_summary: dict[str, Any] | None = None,
+        verification_report_artifact: dict[str, Any] | None = None,
+        repair_summary: dict[str, Any] | None = None,
+        repair_plan_artifact: dict[str, Any] | None = None,
+        repair_attempts_artifact: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._generator.build_manifest(
+            documentation_run_id=run.id,
+            repository_id=run.repository_id,
+            snapshot_id=run.snapshot_id,
+            template_kind=template_kind,
+            requested_template_kind=run.template_kind,
+            template_selection=template_selection,
+            repository_classification=repository_classification,
+            sections=generated_sections,
+            section_artifacts=[
+                section_artifacts_by_key[section.section_key]
+                for section in generated_sections
+            ],
+            documents=bundle.documents,
+            document_artifacts=bundle.document_artifacts,
+            documentation_artifact=bundle.documentation_artifact,
+            evidence_pack_artifact=evidence_pack_artifact,
+            prompt_contract_artifact=prompt_contract_artifact,
+            rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
+            verification_summary=verification_summary,
+            verification_report_artifact=verification_report_artifact,
+            repair_summary=repair_summary,
+            repair_plan_artifact=repair_plan_artifact,
+            repair_attempts_artifact=repair_attempts_artifact,
+        )
 
     def _publish_markdown(
         self,
@@ -511,6 +760,24 @@ def _truncate(value: str, max_length: int) -> str:
     if not value:
         return ""
     return value if len(value) <= max_length else value[:max_length]
+
+
+def _section_by_key(
+    sections: list[GeneratedSection],
+    section_key: str,
+) -> GeneratedSection | None:
+    return next((section for section in sections if section.section_key == section_key), None)
+
+
+def _replace_section(
+    sections: list[GeneratedSection],
+    replacement: GeneratedSection,
+) -> None:
+    for index, section in enumerate(sections):
+        if section.section_key == replacement.section_key:
+            sections[index] = replacement
+            return
+    sections.append(replacement)
 
 
 def _attach_prompt_contracts(

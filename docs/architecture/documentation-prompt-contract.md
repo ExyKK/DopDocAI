@@ -1,9 +1,10 @@
 # Documentation Evidence Packs And Prompt Contract
 
-`DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015`, `DOCS-016B`, `DOCS-017` and
-`DOCS-018` define the handoff between repository evidence and LLM-backed section
-generation. The pipeline must send bounded, auditable and rendered inputs to the
-model instead of raw analysis artifacts.
+`DOCS-008`, `DOCS-008B`, `DOCS-009`, `DOCS-011`, `DOCS-014`, `DOCS-015`,
+`DOCS-016B`, `DOCS-017` and `DOCS-018` define the handoff between repository
+evidence, LLM-backed section generation, verification and repair. The pipeline
+must send bounded, auditable and rendered inputs to the model instead of raw
+analysis artifacts.
 
 ## Evidence Pack
 
@@ -98,6 +99,58 @@ repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}
 `DOCS-010`/`DOCS-012` use this contract as the input to the LLM provider layer.
 Production-like runs call the configured external provider, while `stub` mode
 keeps deterministic smoke generation available without network calls.
+
+## Verification And Repair
+
+`DOCS-008` adds a verification pass after the intent-based documentation set is
+assembled. The default mode is `hybrid`:
+
+- deterministic checks validate manifest v2 shape, document/section presence,
+  citation ids, body citations, short sections, unclosed code fences, raw JSON
+  dumps, `finish_reason=length` and commit-hash leakage outside `change_report`;
+- LLM judge checks every generated section against its prompt contract and
+  rendered evidence pack;
+- LLM judge also checks the full document set for intent drift, duplication,
+  wrong-scope commit history and weak usefulness;
+- `stub` LLM runs automatically fall back to deterministic verification so
+  smoke tests remain cheap and offline.
+
+The verifier writes:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/verification_report.schema-v1.json
+```
+
+The report contains `findings[]`, `section_scores`, `document_scores`,
+`judge_calls[]` and a machine-readable `summary`. Hard `error` findings fail the
+run after repair attempts are exhausted. `warning` findings keep the run
+successful but mark verification as degraded.
+
+`DOCS-008B` wraps verification in a bounded repair loop:
+
+```text
+generate -> verify -> repair -> verify
+```
+
+The loop is separate from technical job retries. It is controlled by
+`DOPDOC_DOCS_MAX_REPAIR_ROUNDS`/`DOCS_MAX_REPAIR_ROUNDS` and defaults to `2`.
+Only sections with repairable `error` findings are regenerated. The repair
+prompt receives the current section markdown, section spec, allowed source ids,
+source index, original prompt payload and relevant verification findings.
+Unsupported or contradicted claims must be removed or rewritten as honest
+unknown/partial statements instead of introducing new evidence.
+
+Repair artifacts:
+
+```text
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/repair_plan.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/repair_attempts.schema-v1.json
+repositories/{repository_id}/snapshots/{snapshot_id}/documentation-runs/{run_id}/sections/{section_key}.attempt-{n}.md
+```
+
+After a repair attempt the pipeline republishes the final section markdown,
+rebuilds affected intent-based documents, rebuilds `documentation.md`, updates
+`manifest.schema-v2.json` and verifies the new set again.
 
 ## Template Selection
 

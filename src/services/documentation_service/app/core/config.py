@@ -121,6 +121,20 @@ class Settings(BaseSettings):
             "DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES",
         ),
     )
+    verification_mode: Literal["deterministic", "llm", "hybrid"] = Field(
+        default="hybrid",
+        validation_alias=AliasChoices(
+            "DOCS_VERIFICATION_MODE",
+            "DOPDOC_DOCS_VERIFICATION_MODE",
+        ),
+    )
+    max_repair_rounds: int = Field(
+        default=2,
+        validation_alias=AliasChoices(
+            "DOCS_MAX_REPAIR_ROUNDS",
+            "DOPDOC_DOCS_MAX_REPAIR_ROUNDS",
+        ),
+    )
 
     database_url: str = "postgresql://dopdoc:dopdoc@localhost:5432/dopdoc"
     repo_db_schema: str = "repo"
