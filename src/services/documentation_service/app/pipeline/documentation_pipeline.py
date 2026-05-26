@@ -30,6 +30,12 @@ from app.pipeline.rendered_evidence import (
 from app.pipeline.repair import RepairPlan, build_repair_attempts_manifest, build_repair_plan
 from app.pipeline.repair_evidence import build_repair_evidence_delta
 from app.pipeline.templates import get_section_templates, select_documentation_template
+from app.pipeline.usage_accounting import (
+    UsagePricing,
+    build_usage_accounting_report,
+    compact_usage_summary,
+    generation_usage_record,
+)
 from app.pipeline.verification import (
     DocumentationVerificationError,
     DocumentationVerifier,
@@ -77,6 +83,7 @@ class DocumentationGenerationPipeline:
         llm_call_retry_delay_s: float = 1.0,
         llm_json_mode_enabled: bool = True,
         pipeline_trace_enabled: bool = True,
+        usage_pricing: UsagePricing | None = None,
     ):
         self._repository_service = repository_service
         self._storage = storage
@@ -98,6 +105,7 @@ class DocumentationGenerationPipeline:
         self._prompt_output_language = prompt_output_language
         self._max_repair_rounds = max(0, max_repair_rounds)
         self._pipeline_trace_enabled = pipeline_trace_enabled
+        self._usage_pricing = usage_pricing
         self._trace: PipelineTrace | None = None
         self._published_artifacts: list[dict[str, Any]] = []
         self._failure_context: dict[str, Any] = {}
@@ -247,6 +255,7 @@ class DocumentationGenerationPipeline:
         report_progress("generating_sections", 78, progress_current=0, progress_total=len(sections))
         generated_sections: list[GeneratedSection] = []
         section_artifacts_by_key: dict[str, dict[str, Any]] = {}
+        generation_usage_records: list[dict[str, Any]] = []
         for index, contract in enumerate(prompt_contracts, start=1):
             self._record_trace(
                 "llm_section_generation_started",
@@ -290,6 +299,13 @@ class DocumentationGenerationPipeline:
                 section=section,
                 llm_task="documentation_section_generation",
             )
+            generation_usage_records.append(
+                generation_usage_record(
+                    section,
+                    task="documentation_section_generation",
+                    repair_round=0,
+                )
+            )
             section_artifacts_by_key[section.section_key] = self._publish_section_markdown(run, section)
             report_progress("generating_sections", 78, progress_current=index, progress_total=len(sections))
 
@@ -304,6 +320,7 @@ class DocumentationGenerationPipeline:
         repair_plans: list[RepairPlan] = []
         repair_attempts: list[dict[str, Any]] = []
         repair_evidence_delta_artifacts: list[dict[str, Any]] = []
+        repair_evidence_delta_manifests: list[dict[str, Any]] = []
         contract_by_section = {contract.section_key: contract for contract in prompt_contracts}
 
         repaired_section_keys_for_next_verification: set[str] | None = None
@@ -379,6 +396,7 @@ class DocumentationGenerationPipeline:
                 contracts_by_section=contract_by_section,
                 retrieval=self._retrieval,
             )
+            repair_evidence_delta_manifests.append(repair_evidence_delta.manifest)
             delta_artifact = self._publish_json(
                 run=run,
                 artifact_kind="repair_evidence_delta",
@@ -399,10 +417,15 @@ class DocumentationGenerationPipeline:
             self._record_trace(
                 "repair_evidence_delta_built",
                 stage="repairing_documentation",
+                usage_stage="repair_retrieval",
+                llm_task="documentation_repair_retrieval",
                 repair_round=plan.repair_round,
                 sections_total=repair_evidence_delta.manifest["summary"]["sections_total"],
                 sources_added_total=repair_evidence_delta.manifest["summary"]["sources_added_total"],
                 queries_total=repair_evidence_delta.manifest["summary"]["queries_total"],
+                findings_requesting_retrieval_total=repair_evidence_delta.manifest["summary"].get(
+                    "findings_requesting_retrieval_total"
+                ),
             )
 
             report_progress(
@@ -454,6 +477,13 @@ class DocumentationGenerationPipeline:
                     "llm_section_repair_completed",
                     section=repaired,
                     llm_task="documentation_section_repair",
+                )
+                generation_usage_records.append(
+                    generation_usage_record(
+                        repaired,
+                        task="documentation_section_repair",
+                        repair_round=plan.repair_round,
+                    )
                 )
                 attempt_artifact = self._publish_markdown(
                     run=run,
@@ -540,6 +570,28 @@ class DocumentationGenerationPipeline:
                 payload=repair_attempts_manifest,
             )
 
+        usage_accounting = build_usage_accounting_report(
+            documentation_run_id=run.id,
+            repository_id=run.repository_id,
+            snapshot_id=run.snapshot_id,
+            attempt=run.attempt,
+            requested_template_kind=run.template_kind,
+            effective_template_kind=effective_template_kind,
+            generation_records=generation_usage_records,
+            verification_reports=verification_reports,
+            repair_evidence_delta_manifests=repair_evidence_delta_manifests,
+            final_report=final_report,
+            pricing=self._usage_pricing,
+        )
+        usage_summary = compact_usage_summary(usage_accounting)
+        usage_accounting_artifact = self._publish_json(
+            run=run,
+            artifact_kind="usage_accounting",
+            section_key=None,
+            key=f"{_attempt_prefix(run)}/usage_accounting.schema-v1.json",
+            payload=usage_accounting,
+        )
+
         draft_manifest = self._build_manifest(
             run=run,
             template_kind=effective_template_kind,
@@ -556,6 +608,8 @@ class DocumentationGenerationPipeline:
             repair_summary=(repair_attempts_manifest or {}).get("summary"),
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            usage_summary=usage_summary,
+            usage_accounting_artifact=usage_accounting_artifact,
             publication_state="draft",
         )
         draft_manifest_artifact = self._publish_json(
@@ -597,6 +651,8 @@ class DocumentationGenerationPipeline:
             repair_summary=(repair_attempts_manifest or {}).get("summary"),
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            usage_summary=usage_summary,
+            usage_accounting_artifact=usage_accounting_artifact,
             pipeline_trace_artifact=pipeline_trace_artifact,
             draft_manifest_artifact=draft_manifest_artifact,
             publication_state="final",
@@ -677,6 +733,8 @@ class DocumentationGenerationPipeline:
                 ],
                 "generation_summary": _generation_summary(generated_sections),
                 "verification_summary": final_report.summary(),
+                "usage_summary": usage_summary,
+                "usage_accounting_artifact": usage_accounting_artifact,
                 "verification_report_artifact": verification_report_artifact,
                 "repair_summary": (repair_attempts_manifest or {}).get("summary"),
                 "repair_plan_artifact": repair_plan_artifact,
@@ -785,6 +843,8 @@ class DocumentationGenerationPipeline:
         repair_summary: dict[str, Any] | None = None,
         repair_plan_artifact: dict[str, Any] | None = None,
         repair_attempts_artifact: dict[str, Any] | None = None,
+        usage_summary: dict[str, Any] | None = None,
+        usage_accounting_artifact: dict[str, Any] | None = None,
         pipeline_trace_artifact: dict[str, Any] | None = None,
         draft_manifest_artifact: dict[str, Any] | None = None,
         publication_state: str = "draft",
@@ -815,6 +875,8 @@ class DocumentationGenerationPipeline:
             repair_summary=repair_summary,
             repair_plan_artifact=repair_plan_artifact,
             repair_attempts_artifact=repair_attempts_artifact,
+            usage_summary=usage_summary,
+            usage_accounting_artifact=usage_accounting_artifact,
             pipeline_trace_artifact=pipeline_trace_artifact,
             draft_manifest_artifact=draft_manifest_artifact,
         )
@@ -1023,10 +1085,17 @@ class DocumentationGenerationPipeline:
     ) -> None:
         generation = section.generation or {}
         retry_errors = generation.get("llm_retry_errors") or []
+        usage_stage = (
+            "repair_generation"
+            if llm_task == "documentation_section_repair"
+            else "generation"
+        )
         self._record_trace(
             event_type,
+            usage_stage=usage_stage,
             llm_task=llm_task,
             section_key=section.section_key,
+            repair_round=generation.get("repair_round", 0),
             provider=generation.get("provider"),
             model=generation.get("model"),
             response_id=generation.get("response_id"),
@@ -1036,6 +1105,7 @@ class DocumentationGenerationPipeline:
             total_tokens=generation.get("total_tokens"),
             estimated_input_tokens=generation.get("estimated_input_tokens"),
             base_contract_estimated_input_tokens=generation.get("base_contract_estimated_input_tokens"),
+            cost_usd=generation.get("cost_usd"),
             latency_ms=generation.get("latency_ms"),
             attempts_total=generation.get("llm_attempts_total"),
             retry_errors_total=len(retry_errors) if isinstance(retry_errors, list) else 0,
@@ -1045,12 +1115,24 @@ class DocumentationGenerationPipeline:
 
     def _record_verification_completed(self, report: VerificationReport) -> None:
         summary = report.summary()
+        verification_phase = "initial" if report.repair_round == 0 else "post_repair"
+        usage_stage = (
+            "verification_initial"
+            if report.repair_round == 0
+            else "verification_post_repair"
+        )
         self._record_trace(
             "verification_completed",
             stage="verifying_documentation",
+            usage_stage=usage_stage,
+            verification_phase=verification_phase,
             repair_round=report.repair_round,
             status=report.status,
             judge_calls_total=summary.get("judge_calls_total"),
+            judge_prompt_tokens=summary.get("judge_prompt_tokens"),
+            judge_completion_tokens=summary.get("judge_completion_tokens"),
+            judge_total_tokens=summary.get("judge_total_tokens"),
+            judge_latency_ms=summary.get("judge_latency_ms"),
             judge_normalizations_total=summary.get("judge_normalizations_total"),
             carried_over_judge_sections_total=summary.get("carried_over_judge_sections_total"),
             errors_total=summary.get("errors_total"),
@@ -1062,8 +1144,16 @@ class DocumentationGenerationPipeline:
             self._record_trace(
                 "llm_judge_completed",
                 stage="verifying_documentation",
-                llm_task="documentation_judge",
+                usage_stage=usage_stage,
+                verification_phase=verification_phase,
+                llm_task=(
+                    "documentation_document_set_verification"
+                    if call.scope == "document_set"
+                    else "documentation_section_verification"
+                ),
                 scope=call.scope,
+                section_key=call.scope.removeprefix("section:") if call.scope.startswith("section:") else None,
+                repair_round=report.repair_round,
                 provider=call.provider,
                 model=call.model,
                 response_id=call.response_id,
@@ -1071,6 +1161,8 @@ class DocumentationGenerationPipeline:
                 prompt_tokens=call.prompt_tokens,
                 completion_tokens=call.completion_tokens,
                 total_tokens=call.total_tokens,
+                estimated_input_tokens=call.estimated_input_tokens,
+                cost_usd=call.cost_usd,
                 latency_ms=call.latency_ms,
                 attempts_total=call.attempts_total,
                 retry_errors_total=len(retry_errors),

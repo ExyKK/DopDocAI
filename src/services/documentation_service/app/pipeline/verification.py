@@ -75,6 +75,8 @@ class JudgeCallMetadata:
     total_tokens: int | None
     latency_ms: int
     response_id: str | None = None
+    cost_usd: float | None = None
+    estimated_input_tokens: int | None = None
     attempts_total: int = 1
     retry_errors: list[dict[str, Any]] = field(default_factory=list)
     response_format: dict[str, Any] | None = None
@@ -90,6 +92,8 @@ class JudgeCallMetadata:
             "total_tokens": self.total_tokens,
             "latency_ms": self.latency_ms,
             "response_id": self.response_id,
+            "cost_usd": self.cost_usd,
+            "estimated_input_tokens": self.estimated_input_tokens,
             "attempts_total": self.attempts_total,
             "retry_errors": self.retry_errors,
             "response_format": self.response_format,
@@ -329,6 +333,7 @@ class DocumentationVerifier:
         return outcome.parsed_value, _call_metadata(
             f"section:{section.section_key}",
             outcome.result,
+            estimated_input_tokens=contract.estimated_input_tokens,
             attempts_total=outcome.attempts_total,
             retry_errors=outcome.retry_errors,
             response_format=response_format,
@@ -801,6 +806,7 @@ def _call_metadata(
     scope: str,
     result: Any,
     *,
+    estimated_input_tokens: int | None = None,
     attempts_total: int = 1,
     retry_errors: list[dict[str, Any]] | None = None,
     response_format: dict[str, Any] | None = None,
@@ -815,6 +821,8 @@ def _call_metadata(
         total_tokens=result.total_tokens,
         latency_ms=result.latency_ms,
         response_id=result.response_id,
+        cost_usd=getattr(result, "cost_usd", None),
+        estimated_input_tokens=estimated_input_tokens,
         attempts_total=attempts_total,
         retry_errors=retry_errors or [],
         response_format=response_format,

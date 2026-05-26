@@ -131,6 +131,8 @@ class DeveloperHandbookGenerator:
         repair_summary: dict[str, Any] | None = None,
         repair_plan_artifact: dict[str, Any] | None = None,
         repair_attempts_artifact: dict[str, Any] | None = None,
+        usage_summary: dict[str, Any] | None = None,
+        usage_accounting_artifact: dict[str, Any] | None = None,
         pipeline_trace_artifact: dict[str, Any] | None = None,
         draft_manifest_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -179,6 +181,8 @@ class DeveloperHandbookGenerator:
             "repair_summary": repair_summary,
             "repair_plan": repair_plan_artifact,
             "repair_attempts": repair_attempts_artifact,
+            "usage_summary": usage_summary,
+            "usage_accounting": usage_accounting_artifact,
             "pipeline_trace": pipeline_trace_artifact,
             "draft_manifest": draft_manifest_artifact,
         }

@@ -112,6 +112,7 @@ def test_openai_compatible_provider_sends_openrouter_headers_and_provider_option
                     "prompt_tokens": 11,
                     "completion_tokens": 7,
                     "total_tokens": 18,
+                    "cost": 0.000012,
                 },
             },
         )
@@ -139,6 +140,7 @@ def test_openai_compatible_provider_sends_openrouter_headers_and_provider_option
 
     assert result.prompt_tokens == 11
     assert result.completion_tokens == 7
+    assert result.cost_usd == 0.000012
     assert requests[0]["headers"]["HTTP-Referer"] == "http://localhost"
     assert requests[0]["headers"]["X-OpenRouter-Title"] == "DopDocAI"
     assert requests[0]["json"]["metadata"]["section_key"] == "entry_points"

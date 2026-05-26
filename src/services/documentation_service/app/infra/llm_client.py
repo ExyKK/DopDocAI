@@ -41,6 +41,7 @@ class LlmCompletionResult:
     total_tokens: int | None
     latency_ms: int
     response_id: str | None = None
+    cost_usd: float | None = None
     raw_response_excerpt: str | None = None
 
 
@@ -121,6 +122,7 @@ class StubLlmCompletionProvider:
             total_tokens=None,
             latency_ms=_elapsed_ms(started),
             response_id=None,
+            cost_usd=None,
         )
 
 
@@ -296,6 +298,7 @@ def _completion_from_payload(
         total_tokens=_int_or_none(usage.get("total_tokens")),
         latency_ms=latency_ms,
         response_id=_optional_str(payload.get("id")),
+        cost_usd=_float_or_none(usage.get("cost") or usage.get("cost_usd")),
         raw_response_excerpt=_truncate(json.dumps(payload, ensure_ascii=False, default=str), 1024),
     )
 
@@ -409,6 +412,15 @@ def _int_or_none(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

@@ -63,6 +63,13 @@ class PipelineTrace:
 
     def summary(self) -> dict[str, Any]:
         counts = Counter(str(event.get("event_type")) for event in self._events)
+        llm_events = [
+            event
+            for event in self._events
+            if str(event.get("event_type", "")).startswith("llm_")
+            and str(event.get("event_type", "")).endswith("_completed")
+        ]
+        stage_totals = _usage_by_stage(llm_events)
         return {
             "events_total": len(self._events),
             "event_counts": dict(sorted(counts.items())),
@@ -70,9 +77,17 @@ class PipelineTrace:
             "failed": any(event.get("event_type") == "pipeline_failed" for event in self._events),
             "llm_retry_errors_total": sum(
                 int(event.get("retry_errors_total") or 0)
-                for event in self._events
-                if str(event.get("event_type", "")).startswith("llm_")
+                for event in llm_events
             ),
+            "llm_calls_total": len(llm_events),
+            "llm_prompt_tokens": _sum_int(event.get("prompt_tokens") for event in llm_events),
+            "llm_completion_tokens": _sum_int(event.get("completion_tokens") for event in llm_events),
+            "llm_total_tokens": _sum_int(event.get("total_tokens") for event in llm_events),
+            "llm_estimated_input_tokens": _sum_int(
+                event.get("estimated_input_tokens") for event in llm_events
+            ),
+            "llm_latency_ms": _sum_int(event.get("latency_ms") for event in llm_events),
+            "llm_usage_by_stage": stage_totals,
         }
 
     def to_dict(self, *, status: str) -> dict[str, Any]:
@@ -124,6 +139,40 @@ def _sanitize(value: Any) -> Any:
 def _looks_sensitive(key: str) -> bool:
     lowered = key.lower()
     return any(token in lowered for token in ("secret", "api_key", "apikey", "token", "password", "authorization"))
+
+
+def _usage_by_stage(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        stage = str(event.get("usage_stage") or event.get("stage") or "_none")
+        grouped.setdefault(stage, []).append(event)
+    return {
+        stage: {
+            "calls_total": len(items),
+            "prompt_tokens": _sum_int(item.get("prompt_tokens") for item in items),
+            "completion_tokens": _sum_int(item.get("completion_tokens") for item in items),
+            "total_tokens": _sum_int(item.get("total_tokens") for item in items),
+            "estimated_input_tokens": _sum_int(
+                item.get("estimated_input_tokens") for item in items
+            ),
+            "latency_ms": _sum_int(item.get("latency_ms") for item in items),
+        }
+        for stage, items in sorted(grouped.items())
+    }
+
+
+def _sum_int(values: Any) -> int | None:
+    total = 0
+    seen = False
+    for value in values:
+        if value is None:
+            continue
+        try:
+            total += int(value)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+    return total if seen else None
 
 
 def _truncate(value: str, max_length: int) -> str:

@@ -269,6 +269,7 @@ def _planning_pipeline():
     from app.infra.retrieval_client import RetrievalClient
     from app.pipeline.documentation_pipeline import DocumentationGenerationPipeline
     from app.pipeline.evidence_pack import EvidencePackBudget
+    from app.pipeline.usage_accounting import UsagePricing
 
     retrieval = None
     if settings.retrieval_enabled:
@@ -317,6 +318,11 @@ def _planning_pipeline():
         llm_call_retry_delay_s=settings.llm_call_retry_delay_s,
         llm_json_mode_enabled=settings.llm_json_mode_enabled,
         pipeline_trace_enabled=settings.pipeline_trace_enabled,
+        usage_pricing=UsagePricing(
+            prompt_usd_per_million=settings.llm_provider_max_price_prompt,
+            completion_usd_per_million=settings.llm_provider_max_price_completion,
+            source="configured_provider_max_price",
+        ),
     )
 
 

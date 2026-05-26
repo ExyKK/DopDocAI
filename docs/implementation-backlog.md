@@ -1479,6 +1479,7 @@
 ### DOCS-028 — Довести run-level usage accounting и trace до уровня экспериментов
 - Priority: `P1`
 - Depends on: `DOCS-013`, `DOCS-020`, `DOCS-025`, `DOCS-026`
+- Status: `completed`
 - Goal: после дорогого run должно быть видно полную стоимость и причину расхода токенов по стадиям, repair rounds и judge calls.
 - Tasks:
 - добавить actual token usage в `pipeline_trace` events для generation, initial judge, repair, post-repair judge and document-set judge;
@@ -1491,6 +1492,12 @@
 - по одному manifest/trace можно объяснить, почему Cobra run потратил сотни тысяч tokens;
 - repair estimate drift виден явно и не требует чтения container logs;
 - run-level accounting пригоден для сравнения нескольких моделей/настроек без ручного парсинга MinIO artifacts.
+- Notes:
+- добавлен `usage_accounting.schema-v1.json` для каждого documentation attempt: `summary`, `by_stage`, `by_task`, `by_section`, `by_model`, `section_quality`, `estimation_drift`, `repair_retrieval`, `llm_calls`;
+- pipeline собирает generation, repair generation и judge usage по всем verification rounds, включая initial/post-repair judge and document-set judge;
+- `manifest.schema-v2.json` и worker run summary получают compact `usage_summary` и ссылку на `usage_accounting` artifact;
+- `pipeline_trace.summary` теперь агрегирует LLM tokens/latency по `usage_stage`, а trace events содержат `usage_stage`, `verification_phase`, `repair_round`, `estimated_input_tokens` и `cost_usd`;
+- rough cost берётся из provider response `usage.cost`/`cost_usd`, если он есть, иначе считается как upper-bound estimate по существующим `DOPDOC_LLM_PROVIDER_MAX_PRICE_*` knobs; при отсутствии pricing явно остаётся `unknown`.
 
 ## Epic GATEWAY — Public API Integration
 
