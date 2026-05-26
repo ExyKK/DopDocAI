@@ -4,7 +4,7 @@ import pytest
 
 from app.infra.llm_client import LlmCompletionResult, LlmProviderError, StubLlmCompletionProvider
 from app.pipeline.generator import GeneratedDocument, GeneratedSection
-from app.pipeline.llm_generation import LlmSectionGenerator
+from app.pipeline.llm_generation import LlmSectionGenerator, build_analysis_limitations_section
 from app.pipeline.prompt_contract import PromptMessage, SectionPromptContract
 from app.pipeline.repair import (
     RepairPlan,
@@ -90,6 +90,166 @@ def test_llm_judge_findings_are_validated_and_recorded() -> None:
     assert report.summary()["judge_calls_total"] == 2
     assert report.section_scores["api_surface"]["groundedness"] == 0.2
     assert any(item.origin == "llm_judge" for item in report.findings)
+
+
+def test_llm_judge_self_contradictory_error_is_normalized() -> None:
+    provider = _JsonProvider(
+        [
+            {
+                "status": "failed",
+                "scores": {"groundedness": 0.9},
+                "findings": [
+                    {
+                        "severity": "error",
+                        "category": "contradicted_claim",
+                        "message": "No contradiction remains; this is actually supported.",
+                        "claim": "The API uses evidence.",
+                        "confidence": 0.9,
+                        "repairable": True,
+                        "repair_strategy": "remove_claim",
+                    }
+                ],
+            },
+            {
+                "status": "passed",
+                "scores": {"usefulness": 0.8},
+                "findings": [],
+            },
+        ]
+    )
+    section = _section("api_surface", "API Surface", "API uses evidence [S1].")
+    contract = _contract("api_surface", "API Surface", source_ids=["S1"])
+
+    report = DocumentationVerifier(provider, mode="hybrid").verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[section],
+        documents=[_document(section)],
+        manifest=_manifest(section),
+        contracts=[contract],
+    )
+
+    assert all(item.severity != "error" for item in report.findings)
+    assert report.summary()["judge_normalizations_total"] == 1
+    finding = next(item for item in report.findings if item.origin == "llm_judge")
+    assert finding.severity == "info"
+    assert finding.repairable is False
+
+
+def test_precise_missing_evidence_gap_can_stay_repairable_error() -> None:
+    provider = _JsonProvider(
+        [
+            {
+                "status": "failed",
+                "scores": {"coverage": 0.4},
+                "findings": [
+                    {
+                        "severity": "error",
+                        "category": "not_enough_evidence",
+                        "message": "Build commands need Makefile or CI evidence.",
+                        "claim": "The project is built with make.",
+                        "confidence": 0.82,
+                        "repairable": True,
+                        "repair_strategy": "expand_evidence",
+                        "evidence_needed": "Makefile or GitHub Actions workflow for build commands",
+                        "retrieval_hints": ["Makefile build", ".github/workflows"],
+                    }
+                ],
+            },
+            {
+                "status": "passed",
+                "scores": {"usefulness": 0.8},
+                "findings": [],
+            },
+        ]
+    )
+    section = _section("build_run_test", "Build Run Test", "Use make to build [S1].")
+    contract = _contract(
+        "build_run_test",
+        "Build Run Test",
+        source_ids=["S1"],
+        template_kind="go_library_handbook",
+    )
+
+    report = DocumentationVerifier(provider, mode="hybrid").verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="go_library_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[section],
+        documents=[_document(section)],
+        manifest=_manifest(section),
+        contracts=[contract],
+    )
+
+    finding = next(item for item in report.findings if item.origin == "llm_judge")
+    assert finding.severity == "error"
+    assert finding.repair_strategy == "expand_evidence"
+
+    plan = build_repair_plan(report)
+    assert plan.sections[0].evidence_expansion_findings == [finding]
+
+
+def test_post_repair_verification_carries_over_unchanged_section_judge_results() -> None:
+    provider = _JsonProvider(
+        [
+            {
+                "status": "passed_with_warnings",
+                "scores": {"coverage": 0.7},
+                "findings": [
+                    {
+                        "severity": "warning",
+                        "category": "readability",
+                        "message": "Minor readability issue.",
+                    }
+                ],
+            },
+            {"status": "passed", "scores": {"usefulness": 0.8}, "findings": []},
+            {"status": "passed", "scores": {"groundedness": 0.95}, "findings": []},
+            {"status": "passed", "scores": {"usefulness": 0.9}, "findings": []},
+            {"status": "passed", "scores": {"usefulness": 0.9}, "findings": []},
+        ]
+    )
+    unchanged = _section("overview", "Overview", "Overview content [S1].")
+    repaired = _section("api_surface", "API Surface", "API uses evidence [S1].")
+    unchanged_contract = _contract("overview", "Overview", source_ids=["S1"])
+    repaired_contract = _contract("api_surface", "API Surface", source_ids=["S1"])
+    verifier = DocumentationVerifier(provider, mode="llm")
+
+    initial = verifier.verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[unchanged, repaired],
+        documents=[_document(unchanged)],
+        manifest=_manifest(unchanged),
+        contracts=[unchanged_contract, repaired_contract],
+    )
+    followup = verifier.verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[unchanged, repaired],
+        documents=[_document(repaired)],
+        manifest=_manifest(repaired),
+        contracts=[unchanged_contract, repaired_contract],
+        repair_round=1,
+        previous_report=initial,
+        judge_section_keys={"api_surface"},
+    )
+
+    assert provider.generated_total == 5
+    assert "overview" in followup.carried_over_judge_sections
+    assert followup.section_scores["overview"]["coverage"] == 0.7
+    assert any(item.section_key == "overview" for item in followup.findings)
 
 
 def test_invalid_judge_json_is_retryable_provider_error() -> None:
@@ -281,11 +441,91 @@ def test_repair_evidence_delta_expands_contract_for_missing_coverage() -> None:
     assert "S2" in updated.source_ids
     assert result.prompt_deltas["command_lifecycle"]["sources"][0]["source_id"] == "S2"
     assert result.manifest["summary"]["sources_added_total"] >= 1
+    assert result.manifest["sections"][0]["summary"]["budget"]["max_delta_sources_per_section"] == 3
     assert result.manifest["sections"][0]["findings"][0]["status"] == "sources_added"
     assert retrieval.calls[0]["filters"]["languages"] == ["go"]
     assert retrieval.calls[0]["filters"]["source_scopes"] == ["runtime"]
     assert retrieval.calls[0]["include_tests"] is False
     assert "Command.Execute" in updated.messages[-1].content
+
+
+def test_repair_evidence_delta_skips_remove_claim_without_retrieval() -> None:
+    finding = VerificationFinding(
+        check_id="llm_judge_section_1",
+        severity="error",
+        category="unsupported_claim",
+        message="Unsupported usage example.",
+        section_key="public_api",
+        claim="Consumer main.go is part of the repository.",
+        repairable=True,
+        repair_strategy="remove_claim",
+        origin="llm_judge",
+    )
+    plan = RepairPlan(
+        documentation_run_id="run-1",
+        repair_round=1,
+        sections=[SectionRepairPlan("public_api", [finding])],
+    )
+    contract = _contract("public_api", "Public API", source_ids=["S1"], template_kind="go_library_handbook")
+    retrieval = _RepairRetrieval()
+
+    result = build_repair_evidence_delta(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="go_library_handbook",
+        repair_plan=plan,
+        contracts_by_section={contract.section_key: contract},
+        retrieval=retrieval,
+    )
+
+    assert retrieval.calls == []
+    assert result.manifest["sections"][0]["findings"][0]["reason"] == "remove_claim_does_not_need_retrieval"
+
+
+def test_repair_evidence_delta_build_run_test_does_not_inherit_go_runtime_filters() -> None:
+    finding = VerificationFinding(
+        check_id="llm_judge_section_1",
+        severity="error",
+        category="not_enough_evidence",
+        message="Build commands need Makefile or CI evidence.",
+        section_key="build_run_test",
+        claim="Build uses make.",
+        evidence_needed="Makefile or workflow build commands",
+        retrieval_hints=["Makefile", ".github/workflows"],
+        repairable=True,
+        repair_strategy="expand_evidence",
+        origin="llm_judge",
+    )
+    plan = RepairPlan(
+        documentation_run_id="run-1",
+        repair_round=1,
+        sections=[SectionRepairPlan("build_run_test", [finding])],
+    )
+    contract = _contract(
+        "build_run_test",
+        "Build, Run, Test",
+        source_ids=["S1"],
+        template_kind="go_library_handbook",
+    )
+    retrieval = _RepairRetrieval()
+
+    result = build_repair_evidence_delta(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="go_library_handbook",
+        repair_plan=plan,
+        contracts_by_section={contract.section_key: contract},
+        retrieval=retrieval,
+    )
+
+    assert retrieval.calls[0]["filters"]["languages"] == []
+    assert retrieval.calls[0]["filters"]["source_scopes"] == []
+    assert all(
+        source["source_kind"] != "go_symbol"
+        for source in result.manifest["sections"][0]["added_sources"]
+    )
 
 
 def test_repair_evidence_delta_blocks_contradicted_claim_retrieval() -> None:
@@ -322,6 +562,44 @@ def test_repair_evidence_delta_blocks_contradicted_claim_retrieval() -> None:
     assert result.updated_contracts == {}
     assert result.manifest["sections"][0]["findings"][0]["retrieval_policy"] == "blocked"
     assert result.manifest["sections"][0]["findings"][0]["added_source_ids"] == []
+
+
+def test_analysis_limitations_section_is_deterministic_and_scopes_absence_to_evidence() -> None:
+    contract = _contract("analysis_limitations", "Analysis Limitations", source_ids=["S1"])
+
+    generated = build_analysis_limitations_section(contract).section
+
+    assert generated.generation is not None
+    assert generated.generation["provider"] == "deterministic"
+    assert "не означает их отсутствие в репозитории" in generated.content_markdown
+    assert "### Sources" in generated.content_markdown
+
+
+def test_analysis_limitations_repository_absence_claim_is_hard_error() -> None:
+    section = _section(
+        "analysis_limitations",
+        "Analysis Limitations",
+        "Файл `cmd/root.go` отсутствует в репозитории [S1].",
+    )
+    contract = _contract("analysis_limitations", "Analysis Limitations", source_ids=["S1"])
+
+    report = DocumentationVerifier(StubLlmCompletionProvider(), mode="deterministic").verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[section],
+        documents=[_document(section)],
+        manifest=_manifest(section),
+        contracts=[contract],
+    )
+
+    assert report.status == "failed"
+    assert any(
+        item.check_id == "analysis_limitations_repository_absence_claim"
+        for item in report.findings
+    )
 
 
 def _section(key: str, title: str, body: str) -> GeneratedSection:
@@ -487,8 +765,10 @@ class _JsonProvider:
 
     def __init__(self, payloads: list[dict]):
         self._payloads = payloads
+        self.generated_total = 0
 
     def generate(self, messages, *, metadata=None, response_format=None):
+        self.generated_total += 1
         payload = self._payloads.pop(0)
         return _result(json.dumps(payload), provider=self.provider_name)
 

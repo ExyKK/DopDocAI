@@ -211,7 +211,7 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
         _from_project_model(builder, project_model, ["workspace_units", "build", "scripts"])
         for item in _manifest_like_files(project_model)[:20]:
             builder.add_file_source(item, "build/run/test manifest")
-    elif key == "known_gaps":
+    elif key in {"known_gaps", "analysis_limitations"}:
         _from_project_model(builder, project_model, ["diagnostics", "unsupported_patterns", "truncated"])
         _from_config_inventory(builder, config_inventory, ["truncated", "unsupported_patterns"])
     elif key == "change_report":
@@ -376,7 +376,7 @@ def _retrieval_filters(template: SectionTemplate) -> dict[str, list[str]]:
 
 
 def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any]]) -> bool:
-    if section_key == "change_report":
+    if section_key in {"change_report", "analysis_limitations", "known_gaps"}:
         return False
 
     if len(existing_sources) < 3:
@@ -400,7 +400,6 @@ def _should_use_retrieval(section_key: str, existing_sources: list[dict[str, Any
         "major_flows",
         "domain_entities",
         "build_run_test",
-        "known_gaps",
     }
 
 

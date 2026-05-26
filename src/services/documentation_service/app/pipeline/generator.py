@@ -207,7 +207,7 @@ def _document_templates(template_kind: str) -> tuple[_DocumentTemplate, ...]:
         return (
             _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the library.", ("overview",)),
             _document_template("onboarding_guide", "Onboarding Guide", "Practical build, test and contribution starting points.", ("build_run_test", "testing")),
-            _document_template("architecture_map", "Architecture Map", "Package structure and command/runtime design.", ("package_map", "public_api", "command_lifecycle", "known_gaps")),
+            _document_template("architecture_map", "Architecture Map", "Package structure and command/runtime design.", ("package_map", "public_api", "command_lifecycle", "analysis_limitations")),
             _document_template("api_reference", "API Reference", "Public Go API surface grounded in indexed symbols.", ("public_api",)),
             _document_template("configuration_reference", "Configuration Reference", "Flags, arguments and configuration-like inputs.", ("flags_and_args",)),
             _document_template("commands_reference", "Commands Reference", "Command lifecycle, flags, completions and docs generation.", ("command_lifecycle", "flags_and_args", "completions", "doc_generation", "build_run_test")),
@@ -218,7 +218,7 @@ def _document_templates(template_kind: str) -> tuple[_DocumentTemplate, ...]:
         return (
             _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the monorepo.", ("overview",)),
             _document_template("onboarding_guide", "Onboarding Guide", "Local development and setup guidance for contributors.", ("local_development", "configuration")),
-            _document_template("architecture_map", "Architecture Map", "Current frontend/backend structure, flows and deployment shape.", ("service_map", "request_flows", "data_model", "frontend", "deployment", "known_gaps")),
+            _document_template("architecture_map", "Architecture Map", "Current frontend/backend structure, flows and deployment shape.", ("service_map", "request_flows", "data_model", "frontend", "deployment", "analysis_limitations")),
             _document_template("api_reference", "API Reference", "HTTP/API surface and request-flow evidence.", ("api_surface", "request_flows")),
             _document_template("configuration_reference", "Configuration Reference", "Environment, config and deployment settings.", ("configuration", "deployment")),
             _document_template("commands_reference", "Commands Reference", "Local scripts, Docker and service commands found in manifests.", ("local_development",)),
@@ -228,7 +228,7 @@ def _document_templates(template_kind: str) -> tuple[_DocumentTemplate, ...]:
     return (
         _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the repository.", ("overview",)),
         _document_template("onboarding_guide", "Onboarding Guide", "Build, run, test and configuration starting points.", ("build_run_test", "configuration")),
-        _document_template("architecture_map", "Architecture Map", "Repository structure, package map, entry points and flows.", ("repository_layout", "package_map", "entry_points", "major_flows", "domain_entities", "integrations", "known_gaps")),
+        _document_template("architecture_map", "Architecture Map", "Repository structure, package map, entry points and flows.", ("repository_layout", "package_map", "entry_points", "major_flows", "domain_entities", "integrations", "analysis_limitations")),
         _document_template("api_reference", "API Reference", "Entry points and integration/API evidence.", ("entry_points", "integrations")),
         _document_template("configuration_reference", "Configuration Reference", "Environment variables, config files and dependency settings.", ("configuration",)),
         _document_template("commands_reference", "Commands Reference", "Commands and local development actions supported by evidence.", ("build_run_test", "entry_points")),

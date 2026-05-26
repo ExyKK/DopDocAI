@@ -88,22 +88,25 @@ class LlmSectionGenerator:
         repair_round: int,
         repair_evidence_delta: dict[str, Any] | None = None,
     ) -> SectionGenerationOutput:
+        messages = _repair_messages(
+            contract,
+            current_markdown=current_markdown,
+            findings=findings,
+            repair_round=repair_round,
+            repair_evidence_delta=repair_evidence_delta,
+        )
+        estimated_repair_input_tokens = sum(_estimate_tokens(message.content) for message in messages)
         outcome = call_llm_with_retry(
             self._provider,
-            _repair_messages(
-                contract,
-                current_markdown=current_markdown,
-                findings=findings,
-                repair_round=repair_round,
-                repair_evidence_delta=repair_evidence_delta,
-            ),
+            messages,
             metadata={
                 "task": "documentation_section_repair",
                 "section_key": contract.section_key,
                 "template_kind": contract.template_kind,
                 "repair_round": str(repair_round),
                 "source_count": str(len(contract.source_ids)),
-                "estimated_input_tokens": str(contract.estimated_input_tokens),
+                "estimated_input_tokens": str(estimated_repair_input_tokens),
+                "base_contract_estimated_input_tokens": str(contract.estimated_input_tokens),
                 "repair_delta_sources": str(
                     len((repair_evidence_delta or {}).get("sources") or [])
                 ),
@@ -125,6 +128,8 @@ class LlmSectionGenerator:
             "repair_round": repair_round,
             "repair_findings_total": len(findings),
             "repair_delta_sources_total": len((repair_evidence_delta or {}).get("sources") or []),
+            "estimated_input_tokens": estimated_repair_input_tokens,
+            "base_contract_estimated_input_tokens": contract.estimated_input_tokens,
             "llm_attempts_total": outcome.attempts_total,
             "llm_retry_errors": outcome.retry_errors,
         }
@@ -148,6 +153,123 @@ class LlmSectionGenerator:
             ),
             metadata=metadata,
         )
+
+
+def build_analysis_limitations_section(contract: SectionPromptContract) -> SectionGenerationOutput:
+    prompt_payload = _json_object(contract.messages[-1].content)
+    evidence_pack = prompt_payload.get("evidence_pack") if isinstance(prompt_payload, dict) else {}
+    if not isinstance(evidence_pack, dict):
+        evidence_pack = {}
+
+    source_ids = [
+        source_id
+        for source_id in evidence_pack.get("source_ids") or contract.source_ids
+        if isinstance(source_id, str)
+    ]
+    citation = f" [{source_ids[0]}]" if source_ids else ""
+    raw_summary = evidence_pack.get("raw_evidence_summary")
+    if not isinstance(raw_summary, dict):
+        raw_summary = {}
+    warnings = [str(item) for item in (evidence_pack.get("warnings") or [])[:8]]
+
+    if contract.output_language == "en":
+        body = _analysis_limitations_body_en(citation, raw_summary, warnings, len(source_ids))
+    else:
+        body = _analysis_limitations_body_ru(citation, raw_summary, warnings, len(source_ids))
+
+    processed_markdown, text_warnings = _post_process_section_markdown(
+        body,
+        contract.title,
+        source_index=contract.source_index,
+        finish_reason="stop",
+    )
+    metadata: dict[str, object] = {
+        "provider": "deterministic",
+        "model": "analysis_limitations_v1",
+        "finish_reason": "stop",
+        "prompt_tokens": 0,
+        "completion_tokens": _estimate_tokens(processed_markdown),
+        "total_tokens": _estimate_tokens(processed_markdown),
+        "latency_ms": 0,
+        "response_id": None,
+        "prompt_version": contract.schema_version,
+        "warnings": text_warnings,
+        "quality_status": _quality_status(text_warnings),
+        "deterministic": True,
+    }
+    return SectionGenerationOutput(
+        section=GeneratedSection(
+            section_key=contract.section_key,
+            title=contract.title,
+            ordinal=contract.ordinal,
+            content_markdown=processed_markdown,
+            source_count=len(contract.source_ids),
+            generation=metadata,
+            section_spec=contract.section_spec,
+        ),
+        metadata=metadata,
+    )
+
+
+def _analysis_limitations_body_ru(
+    citation: str,
+    raw_summary: dict[str, Any],
+    warnings: list[str],
+    source_count: int,
+) -> str:
+    lines = [
+        "Эта секция описывает ограничения автоматического анализа текущего run, а не дефекты репозитория.",
+        "",
+        "- Выводы документации ограничены источниками, выбранными в evidence pack; отсутствие файла, функции или команды в этих источниках не означает их отсутствие в репозитории.",
+        f"- Для этой секции выбрано источников: `{source_count}`.{citation}",
+    ]
+    omitted = raw_summary.get("omitted_sources_total")
+    truncated = raw_summary.get("truncated_sources_total")
+    retrieval_error = raw_summary.get("retrieval_error")
+    retrieval_query = raw_summary.get("retrieval_query")
+    if omitted:
+        lines.append(f"- Часть источников-кандидатов не попала в prompt из-за бюджета evidence: `{omitted}` omitted sources.{citation}")
+    if truncated:
+        lines.append(f"- Некоторые источники были усечены перед передачей в prompt: `{truncated}` truncated sources.{citation}")
+    if retrieval_query:
+        lines.append("- Для этой секции не используется общий retrieval; ограничения формируются из structured diagnostics и metadata evidence.")
+    if retrieval_error:
+        lines.append(f"- Retrieval сообщил ошибку: `{retrieval_error}`. Это ограничивает полноту evidence, но не доказывает отсутствие сущностей в репозитории.")
+    if warnings:
+        lines.append("")
+        lines.append("Наблюдения по evidence:")
+        for warning in warnings[:5]:
+            lines.append(f"- `{warning}`.{citation}")
+    return "\n".join(lines)
+
+
+def _analysis_limitations_body_en(
+    citation: str,
+    raw_summary: dict[str, Any],
+    warnings: list[str],
+    source_count: int,
+) -> str:
+    lines = [
+        "This section describes limitations of the automated analysis run, not defects in the repository.",
+        "",
+        "- Documentation claims are limited to the selected evidence pack; a file, function or command missing from evidence is not proof that it is missing from the repository.",
+        f"- Sources selected for this section: `{source_count}`.{citation}",
+    ]
+    omitted = raw_summary.get("omitted_sources_total")
+    truncated = raw_summary.get("truncated_sources_total")
+    retrieval_error = raw_summary.get("retrieval_error")
+    if omitted:
+        lines.append(f"- Some candidate sources were omitted by evidence budget: `{omitted}` omitted sources.{citation}")
+    if truncated:
+        lines.append(f"- Some sources were truncated before prompting: `{truncated}` truncated sources.{citation}")
+    if retrieval_error:
+        lines.append(f"- Retrieval reported an error: `{retrieval_error}`. This limits evidence completeness but does not prove repository absence.")
+    if warnings:
+        lines.append("")
+        lines.append("Evidence observations:")
+        for warning in warnings[:5]:
+            lines.append(f"- `{warning}`.{citation}")
+    return "\n".join(lines)
 
 
 def _repair_messages(
@@ -207,6 +329,19 @@ def _repair_messages(
 
 def json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str)
+
+
+def _json_object(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _estimate_tokens(value: str) -> int:
+    text = str(value or "")
+    return max(1, (len(text) + 3) // 4) if text else 0
 
 
 def _post_process_section_markdown(

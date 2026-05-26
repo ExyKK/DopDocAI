@@ -194,8 +194,8 @@ def test_prompt_contract_fixture_rules_are_present() -> None:
 def test_evidence_planner_filters_generated_retrieval_for_generic_sections() -> None:
     templates = (
         SectionTemplate(
-            key="known_gaps",
-            title="Known Gaps",
+            key="analysis_limitations",
+            title="Analysis Limitations",
             retrieval_query="generated files gaps",
         ),
     )
@@ -204,9 +204,7 @@ def test_evidence_planner_filters_generated_retrieval_for_generic_sections() -> 
     sections = planner.plan(snapshot_id="snapshot-1", templates=templates, artifacts={})
 
     section = sections[0]
-    matches = section.evidence["retrieval_matches"]
-    assert [match["file_path"] for match in matches] == ["cmd/server/main.go"]
-    assert all(match["source_scope"] != "generated" for match in matches)
+    assert "retrieval_matches" not in section.evidence
     assert section.rendered_evidence_pack is not None
     rendered = section.rendered_evidence_pack.to_dict()
     assert "backend/service/docs/docs.go" not in json.dumps(rendered, ensure_ascii=False)

@@ -8,9 +8,12 @@ from app.pipeline.repair import RepairPlan, finding_requires_targeted_retrieval
 from app.pipeline.verification import VerificationFinding
 
 REPAIR_EVIDENCE_DELTA_SCHEMA_VERSION = 1
-_MAX_QUERY_LENGTH = 1200
-_MAX_DELTA_SOURCES_PER_SECTION = 8
-_MAX_DELTA_SOURCE_CHARS = 6000
+_MAX_QUERY_LENGTH = 520
+_MAX_QUERIES_PER_SECTION = 4
+_MAX_DELTA_SOURCES_PER_SECTION = 3
+_MAX_DELTA_SOURCES_PER_FINDING = 1
+_MAX_NEIGHBORHOOD_LOOKUPS_PER_SECTION = 1
+_MAX_DELTA_SOURCE_CHARS = 2600
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,8 @@ def _expand_section(
     source_index: list[dict[str, Any]] = []
     finding_entries: list[dict[str, Any]] = []
     seen_sources = _existing_source_keys(contract)
+    queries_used = 0
+    neighborhood_lookups_used = 0
 
     for finding in findings:
         decision = _finding_decision(finding)
@@ -122,6 +127,19 @@ def _expand_section(
                 }
             )
             continue
+        if len(added_sources) >= _MAX_DELTA_SOURCES_PER_SECTION:
+            finding_entries.append(
+                {
+                    "finding": finding.to_dict(),
+                    "retrieval_policy": decision["retrieval_policy"],
+                    "status": "skipped",
+                    "reason": "section_delta_source_cap_reached",
+                    "queries": [],
+                    "added_source_ids": [],
+                    "discarded_results": [],
+                }
+            )
+            continue
         if retrieval is None:
             finding_entries.append(
                 {
@@ -131,6 +149,20 @@ def _expand_section(
                     "reason": "retrieval_client_unavailable",
                     "queries": [],
                     "added_source_ids": [],
+                    "discarded_results": [],
+                }
+            )
+            continue
+        if queries_used >= _MAX_QUERIES_PER_SECTION:
+            finding_entries.append(
+                {
+                    "finding": finding.to_dict(),
+                    "retrieval_policy": "targeted",
+                    "status": "skipped",
+                    "reason": "section_query_cap_reached",
+                    "queries": [],
+                    "added_source_ids": [],
+                    "discarded_results": [],
                 }
             )
             continue
@@ -139,14 +171,16 @@ def _expand_section(
         filters, include_tests = _targeted_filters(contract, finding)
         queries: list[dict[str, Any]] = []
         added_for_finding: list[str] = []
+        discarded_results: list[dict[str, Any]] = []
         try:
             matches = retrieval.search(
                 snapshot_id,
                 query,
-                top_k=4,
+                top_k=3,
                 filters=filters,
                 include_tests=include_tests,
             )
+            queries_used += 1
             queries.append(
                 {
                     "query_kind": "targeted",
@@ -173,17 +207,29 @@ def _expand_section(
                         }
                     ],
                     "added_source_ids": [],
+                    "discarded_results": [],
                 }
             )
             continue
 
-        selected = [
-            match
-            for match in matches
-            if _allow_delta_match(contract, finding, match) and _source_key(match) not in seen_sources
-        ][:3]
-        selected.extend(
-            _neighborhood_matches(
+        selected: list[RetrievedSource] = []
+        for match in matches:
+            discard_reason = _discard_reason(contract, finding, match, seen_sources)
+            if discard_reason is not None:
+                discarded_results.append(_discarded_result(match, discard_reason))
+                continue
+            selected.append(match)
+            if len(selected) >= _MAX_DELTA_SOURCES_PER_FINDING:
+                break
+
+        if (
+            selected
+            and _allow_neighborhood_lookup(finding)
+            and neighborhood_lookups_used < _MAX_NEIGHBORHOOD_LOOKUPS_PER_SECTION
+            and queries_used < _MAX_QUERIES_PER_SECTION
+            and len(added_sources) + len(selected) < _MAX_DELTA_SOURCES_PER_SECTION
+        ):
+            neighborhood, used_lookup = _neighborhood_matches(
                 retrieval=retrieval,
                 snapshot_id=snapshot_id,
                 query=query,
@@ -194,8 +240,18 @@ def _expand_section(
                 contract=contract,
                 finding=finding,
                 queries=queries,
+                max_results=max(
+                    0,
+                    min(
+                        _MAX_DELTA_SOURCES_PER_FINDING,
+                        _MAX_DELTA_SOURCES_PER_SECTION - len(added_sources) - len(selected),
+                    ),
+                ),
             )
-        )
+            selected.extend(neighborhood)
+            if used_lookup:
+                neighborhood_lookups_used += 1
+                queries_used += 1
 
         for match in selected:
             if len(added_sources) >= _MAX_DELTA_SOURCES_PER_SECTION:
@@ -220,6 +276,7 @@ def _expand_section(
                 "reason": None if added_for_finding else "no_matching_runtime_evidence",
                 "queries": queries,
                 "added_source_ids": added_for_finding,
+                "discarded_results": discarded_results[:8],
             }
         )
 
@@ -252,6 +309,15 @@ def _expand_section(
             ),
             "queries_total": sum(len(entry["queries"]) for entry in finding_entries),
             "sources_added_total": len(added_sources),
+            "budget": {
+                "max_queries_per_section": _MAX_QUERIES_PER_SECTION,
+                "max_delta_sources_per_section": _MAX_DELTA_SOURCES_PER_SECTION,
+                "max_delta_sources_per_finding": _MAX_DELTA_SOURCES_PER_FINDING,
+                "max_neighborhood_lookups_per_section": _MAX_NEIGHBORHOOD_LOOKUPS_PER_SECTION,
+                "max_delta_source_chars": _MAX_DELTA_SOURCE_CHARS,
+                "queries_used": queries_used,
+                "neighborhood_lookups_used": neighborhood_lookups_used,
+            },
         },
     }
     return _SectionExpansion(
@@ -262,6 +328,20 @@ def _expand_section(
 
 
 def _finding_decision(finding: VerificationFinding) -> dict[str, Any]:
+    if finding.section_key in {"known_gaps", "analysis_limitations"}:
+        return {
+            "requests_retrieval": False,
+            "retrieval_policy": "not_needed",
+            "status": "skipped",
+            "reason": "analysis_limitations_are_rewrite_only",
+        }
+    if finding.repair_strategy == "remove_claim":
+        return {
+            "requests_retrieval": False,
+            "retrieval_policy": "not_needed",
+            "status": "skipped",
+            "reason": "remove_claim_does_not_need_retrieval",
+        }
     if finding.category in {"contradicted_claim", "wrong_scope"}:
         return {
             "requests_retrieval": False,
@@ -303,10 +383,8 @@ def _targeted_query(
         contract.title,
         finding.claim,
         finding.evidence_needed,
-        finding.suggested_fix,
-        finding.message,
         " ".join(finding.retrieval_hints),
-        " ".join(str(item) for item in section_spec.get("must_cover") or []),
+        " ".join(str(item) for item in (section_spec.get("must_cover") or [])[:3]),
     ]
     query = " ".join(piece.strip() for piece in pieces if isinstance(piece, str) and piece.strip())
     return _truncate(query, _MAX_QUERY_LENGTH)
@@ -320,10 +398,29 @@ def _targeted_filters(
     scopes = _single_or_empty(_values_from_source_index(contract.source_index, "source_scope"))
     workspace_unit_ids = _single_or_empty(_values_from_source_index(contract.source_index, "workspace_unit_id"))
     package_ids = _single_or_empty(_values_from_source_index(contract.source_index, "package_id"))
+    section_scope = contract.section_spec.get("retrieval_scope") if isinstance(contract.section_spec, dict) else {}
+    explicit_languages = False
+    explicit_scopes = False
+    if isinstance(section_scope, dict):
+        explicit_languages = bool(_string_list(section_scope.get("languages")))
+        explicit_scopes = bool(_string_list(section_scope.get("source_scopes")))
+        languages = _string_list(section_scope.get("languages")) or languages
+        scopes = _string_list(section_scope.get("source_scopes")) or scopes
+        chunk_kinds = _string_list(section_scope.get("chunk_kinds"))
+    else:
+        chunk_kinds = []
 
     include_tests = _finding_mentions_tests(finding) or contract.section_key == "testing"
+    if isinstance(section_scope, dict) and isinstance(section_scope.get("include_tests"), bool):
+        include_tests = bool(section_scope["include_tests"]) or include_tests
     if contract.template_kind == "go_library_handbook":
-        languages = ["go"]
+        if contract.section_key != "build_run_test":
+            languages = ["go"]
+        else:
+            if not explicit_languages:
+                languages = []
+            if not explicit_scopes:
+                scopes = []
         if contract.section_key in {
             "overview",
             "public_api",
@@ -343,9 +440,9 @@ def _targeted_filters(
             "workspace_unit_ids": workspace_unit_ids,
             "languages": languages,
             "source_scopes": scopes,
-            "chunk_kinds": [],
+            "chunk_kinds": chunk_kinds,
             "package_ids": package_ids,
-            "file_paths": [],
+            "file_paths": _file_path_hints(finding),
         },
         include_tests,
     )
@@ -363,8 +460,12 @@ def _neighborhood_matches(
     contract: SectionPromptContract,
     finding: VerificationFinding,
     queries: list[dict[str, Any]],
-) -> list[RetrievedSource]:
+    max_results: int,
+) -> tuple[list[RetrievedSource], bool]:
     result: list[RetrievedSource] = []
+    used_lookup = False
+    if max_results <= 0:
+        return result, used_lookup
     for seed in seeds:
         if not seed.file_path:
             continue
@@ -395,6 +496,7 @@ def _neighborhood_matches(
             )
             continue
 
+        used_lookup = True
         queries.append(
             {
                 "query_kind": "source_neighborhood",
@@ -411,9 +513,9 @@ def _neighborhood_matches(
             if not _allow_delta_match(contract, finding, match):
                 continue
             result.append(match)
-            if len(result) >= 2:
-                return result
-    return result
+            if len(result) >= max_results:
+                return result, used_lookup
+    return result, used_lookup
 
 
 def _source_payload(
@@ -528,6 +630,8 @@ def _allow_delta_match(
         return False
     if finding.category in {"contradicted_claim", "wrong_scope"}:
         return False
+    if contract.section_key == "build_run_test" and match.source_kind == "go_symbol":
+        return False
     if (
         contract.template_kind == "go_library_handbook"
         and contract.section_key in {"overview", "public_api", "command_lifecycle", "flags_and_args"}
@@ -535,6 +639,32 @@ def _allow_delta_match(
     ):
         return False
     return True
+
+
+def _discard_reason(
+    contract: SectionPromptContract,
+    finding: VerificationFinding,
+    match: RetrievedSource,
+    seen_sources: set[tuple[Any, ...]],
+) -> str | None:
+    if _source_key(match) in seen_sources:
+        return "duplicate_source"
+    if not _allow_delta_match(contract, finding, match):
+        return "disallowed_by_section_policy"
+    return None
+
+
+def _discarded_result(match: RetrievedSource, reason: str) -> dict[str, Any]:
+    return {
+        "reason": reason,
+        "chunk_id": match.chunk_id,
+        "file_path": match.file_path,
+        "symbol_name": match.symbol_name,
+        "source_kind": match.source_kind,
+        "language": match.language,
+        "source_scope": match.source_scope,
+        "score": match.score,
+    }
 
 
 def _values_from_source_index(source_index: list[dict[str, Any]], key: str) -> list[str]:
@@ -564,6 +694,68 @@ def _finding_mentions_tests(finding: VerificationFinding) -> bool:
         if item
     ).lower()
     return any(marker in text for marker in ("test", "_test", "тест"))
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _file_path_hints(finding: VerificationFinding) -> list[str]:
+    text = " ".join(
+        item
+        for item in [
+            finding.claim,
+            finding.evidence_needed,
+            finding.message,
+            finding.suggested_fix,
+            " ".join(finding.retrieval_hints),
+        ]
+        if item
+    )
+    hints: list[str] = []
+    for token in text.replace("`", " ").replace(",", " ").split():
+        normalized = token.strip("()[]{}:;\"'")
+        if not normalized:
+            continue
+        if "/" in normalized or normalized.endswith(
+            (
+                ".go",
+                ".mod",
+                ".sum",
+                ".yml",
+                ".yaml",
+                ".json",
+                ".toml",
+                ".sql",
+                ".md",
+            )
+        ) or normalized in {"Makefile", "Dockerfile"}:
+            hints.append(normalized)
+    return _dedupe(hints)[:4]
+
+
+def _allow_neighborhood_lookup(finding: VerificationFinding) -> bool:
+    if _file_path_hints(finding):
+        return True
+    for hint in finding.retrieval_hints:
+        if "/" in hint or "::" in hint or hint.startswith("S") and hint[1:].isdigit():
+            return True
+        if "." in hint and " " not in hint:
+            return True
+    return False
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 def _existing_source_keys(contract: SectionPromptContract) -> set[tuple[Any, ...]]:

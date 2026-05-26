@@ -1142,140 +1142,6 @@
 - verification summary можно использовать как baseline quality table для диплома;
 - отсутствие pricing metadata не ломает run, но явно помечается как unknown cost.
 
-### DOCS-020 — Добавить structured observability для documentation pipeline
-- Priority: `P0`
-- Status: `completed`
-- Depends on: `DOCS-012`, `DOCS-008`, `DOCS-008B`
-- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
-- Goal: failed/partial documentation run должен быть диагностируемым без ручного чтения MinIO/Postgres и без догадок по `httpx` логам.
-- Tasks:
-- ввести structured logs для `documentation_worker` и pipeline stages с обязательными полями: `documentation_run_id`, `attempt`, `repository_id`, `snapshot_id`, `template_kind`, `effective_template_kind`, `stage`, `section_key`, `repair_round`, `llm_task`, `artifact_kind`;
-- логировать template selection и repository classification: kind, confidence, top signals, selected template and reason;
-- логировать LLM call lifecycle: task, provider/model, prompt token estimate, source count, response id, finish reason, actual token usage, latency, retry attempt;
-- логировать artifact publication: artifact kind, storage key, schema version, size, checksum, section key;
-- публиковать `pipeline_trace.schema-v1.json` с компактным ordered event log по stage/section/LLM/artifact events;
-- публиковать partial diagnostic artifact при падении generation, verification или repair: failed task, section key, retryable flag, provider response metadata, last successful section, already published artifacts;
-- добавить `log_level`/`trace_artifact_enabled` config knobs, но production-like local default должен оставлять trace artifact включённым.
-- Acceptance:
-- по одному failed run можно понять, на какой секции/judge/repair call он упал и какие артефакты относятся к этой попытке;
-- логи показывают requested/effective template и почему classifier выбрал именно его;
-- failed run публикует machine-readable diagnostics даже если verification не дошёл до final report;
-- `pipeline_trace.schema-v1.json` не содержит полные prompt/response bodies и не раскрывает secrets.
-- Notes:
-- добавлен `pipeline_trace.schema-v1.json` с ordered events по stage, LLM, judge, repair и artifact publication;
-- добавлен `pipeline_error.schema-v1.json` для technical failures до финального verification report;
-- worker/pipeline логируют progress, template selection, LLM lifecycle и artifact publication key-value сообщениями;
-- добавлены `DOPDOC_DOCS_LOG_LEVEL` и `DOPDOC_DOCS_PIPELINE_TRACE_ENABLED`, trace включён по умолчанию.
-
-### DOCS-021 — Укрепить LLM call policy, JSON mode и retry на уровне вызова
-- Priority: `P0`
-- Status: `completed`
-- Depends on: `DOCS-010`, `DOCS-008`, `DOCS-020`
-- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
-- Goal: один пустой ответ модели или битый JSON judge не должен переигрывать весь documentation run через job retry.
-- Tasks:
-- расширить `LlmClientConfig` и OpenAI/OpenRouter-compatible client поддержкой per-call `response_format`, включая JSON object mode для judge/structured tasks;
-- для verification judge включить JSON mode по умолчанию, если provider/model supports it; для обычной генерации оставить markdown mode;
-- добавить call-level retry wrapper для `section_generation`, `section_repair`, `section_judge`, `document_set_judge`: retry `llm_response_empty`, timeout, rate-limit/5xx, invalid judge JSON в пределах конкретного вызова;
-- при invalid judge JSON делать retry с более жёстким correction prompt / system reminder, не запуская заново generation stage;
-- после исчерпания call-level attempts публиковать `llm_call_error.schema-v1.json` или включать ошибку в `pipeline_trace`: task, section key, response id, finish reason, sanitized response excerpt, error code;
-- разделить retryable technical provider failures и quality verification failures: technical failures retry locally first, quality failures идут в repair loop или final failed report;
-- добавить unit tests на JSON mode request payload, empty response retry, invalid judge JSON retry и exhausted call-level failure.
-- Acceptance:
-- `verification_judge_invalid_response` не переводит run в job-level retry, пока не исчерпаны call-level attempts;
-- `llm_response_empty` на одной секции повторяет только эту секцию, а не весь run;
-- judge получает JSON-mode request, когда режим поддержан;
-- при exhausted call retry run содержит diagnostic artifact с section/task context.
-- Notes:
-- `LlmCompletionProvider.generate` получил per-call `response_format`, OpenRouter/OpenAI-compatible request теперь умеет JSON object mode;
-- judge использует JSON mode по умолчанию и retry correction message при invalid JSON;
-- `call_llm_with_retry` ретраит generation, repair, section judge и document-set judge на уровне конкретного вызова;
-- exhausted retries сохраняют task/section/attempt/retry metadata в exception details и diagnostic artifacts;
-- добавлены тесты на JSON-mode payload, retry пустого ответа, retry invalid judge JSON и trace sanitization.
-
-### DOCS-022 — Сделать documentation artifacts attempt-scoped и resumable
-- Priority: `P1`
-- Status: `completed`
-- Depends on: `DOCS-020`, `DOCS-021`
-- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
-- Goal: повторные job attempts не должны смешивать артефакты разных попыток и не должны без необходимости терять уже успешно созданные секции.
-- Tasks:
-- добавить attempt-aware artifact key convention, например `documentation-runs/{run_id}/attempts/{attempt}/...`, и финальные stable pointers/artifacts только после successful verification;
-- включить `attempt` в metadata регистрации documentation artifacts и diagnostics;
-- разделить draft artifacts (`section_markdown`, attempts, partial documents, trace) и final artifacts (`documentation.md`, intent-based docs, manifest) на уровне key convention/artifact kind;
-- при job-level retry читать existing attempt state и решать, можно ли reuse уже completed sections или нужно начинать новый clean attempt;
-- не перезаписывать `generation_errors.schema-v1.json`, `verification_error.schema-v1.json`, `repair_attempts.schema-v1.json` от предыдущей попытки;
-- обновить cleanup/retention notes: старые attempts можно хранить для дипломных экспериментов, но final consumers должны видеть только final manifest/documentation artifacts.
-- Acceptance:
-- в MinIO/Postgres видно, какие artifacts принадлежат attempt 1/2/3;
-- failed run не выглядит как успешная смесь секций и repair attempts из разных попыток;
-- public/latest documentation consumers не получают draft artifacts;
-- повторный attempt может reuse безопасные завершённые секции или явно начинает новую isolated attempt.
-- Notes:
-- RepositoryService теперь хранит `attempt` в `repo.documentation_artifacts`, возвращает его в artifact DTO и умеет list artifacts by documentation run/attempt;
-- documentation worker публикует draft/debug artifacts под `documentation-runs/{run_id}/attempts/{attempt}/...`;
-- draft reader-facing artifacts получают `draft_*` artifact kinds, а stable `documentation.md`, intent docs и `manifest.schema-v2.json` публикуются только после успешной verification;
-- job-level retry читает existing artifact state и явно выбирает `clean_attempt`, фиксируя решение в `pipeline_trace`;
-- добавлена EF migration `20260525000100_AddDocumentationArtifactAttempt`.
-
-### DOCS-023 — Исправить classification и evidence scope для Go library/CLI репозиториев
-- Priority: `P0`
-- Status: `completed`
-- Depends on: `DOCS-016`, `DOCS-016B`, `DOCS-017`, `RAG-005`
-- Goal: Cobra-like repositories должны получать typed Go library/CLI documentation, а retrieval evidence не должен превращать consumer docs/examples в current-state claims о самом репозитории.
-- Tasks:
-- поправить classifier scoring: root Go module without HTTP/frontend/API specs should be `library`/`cli_tool` even if workspace role is currently `backend`;
-- добавить explicit signals for Go library packages: exported symbols, package name/module path, no runnable entrypoint package, docs package, CLI/Cobra terms;
-- добавить regression test на real-ish `spf13/cobra` artifact shape: `developer_handbook` request должен auto-select `go_library_handbook`;
-- пересмотреть retrieval queries/filters для Go library template: current architecture sections должны предпочитать runtime Go symbols/packages over `site/content/*` consumer docs;
-- помечать docs/user-guide retrieval as `consumer_example` или lower-priority source для claims о consuming applications, чтобы модель не утверждала наличие `main.go`/`cmd.Execute()` внутри библиотеки;
-- добавить prompt rule для Go library sections: distinguish repository implementation from examples showing how downstream applications use the library;
-- добавить verification check/warning для wrong-scope consumer-example claims, особенно в entry points / command lifecycle sections.
-- Acceptance:
-- для `spf13/cobra` effective template становится `go_library_handbook`;
-- generated docs не утверждают, что Cobra repository itself has `main.go`/`cmd.Execute()` entrypoint based only on `site/content/user_guide.md`;
-- retrieval sources in command lifecycle/public API sections are primarily runtime symbols and package graph evidence;
-- wrong-scope consumer-doc claims попадают в verification findings или repair plan.
-- Notes:
-- classifier downweights backend role for root Go module shapes without HTTP/frontend/API surface and adds explicit signals for root modules, exported symbols, docs packages and Cobra/CLI terms;
-- `go_library_handbook` section templates request `go`/`runtime` retrieval for current-state API/command/package sections and keep tests only where relevant;
-- prompt contract adds Go library rules that distinguish repository implementation from downstream consumer examples;
-- deterministic verification now warns on consumer example wrong-scope claims around `main.go`/`cmd.Execute()`;
-- added regression tests for Cobra-like backend-role artifacts, Go library retrieval scope and repair evidence expansion.
-
-### DOCS-024 — Отразить effective template в `GetDocumentationRun`
-- Priority: `P0`
-- Status: `completed`
-- Depends on: `DOCS-016`, `DOCS-020`, `DOCS-023`
-- Goal: публичный status endpoint должен показывать не только requested template, но и фактически выбранный typed template после auto-selection.
-- Tasks:
-- добавить nullable `EffectiveTemplateKind` в `repo.documentation_runs`;
-- выставлять effective template сразу после repository classification/template selection в documentation worker, до generation/verification;
-- вернуть в `GET /api/v1/documentation-runs/{id}` поля `requested_template_kind` и `effective_template_kind`;
-- сделать `template_kind` в response фактическим шаблоном, когда `effective_template_kind` уже известен, иначе fallback на requested template для queued runs;
-- сохранить active-run uniqueness по requested `TemplateKind`, чтобы auto-selection не ломала idempotency create endpoint.
-- Acceptance:
-- новый run, запрошенный как `developer_handbook`, после selection возвращает `template_kind=go_library_handbook` и `requested_template_kind=developer_handbook`;
-- failed verification runs тоже сохраняют effective template в Postgres;
-- старые runs без нового поля остаются совместимыми и возвращают requested template.
-- Notes:
-- добавлена EF migration `20260525000200_AddDocumentationRunEffectiveTemplateKind`;
-- `documentation_service` обновляет `EffectiveTemplateKind` через job store callback сразу после template selection;
-- `DocumentationRunResponse` теперь содержит `requested_template_kind`/`effective_template_kind`, а legacy `template_kind` становится effective-or-requested alias.
-
-### DOCS-019 — Добавить optional per-run caps и budget guardrails
-- Priority: `P2`
-- Depends on: `DOCS-013`
-- Goal: позже добавить управляемые лимиты стоимости/объёма без блокировки текущего перехода к качественной генерации и verification.
-- Tasks:
-- добавить per-run caps: max sections, max input tokens, max output tokens, max judge calls, max estimated USD;
-- добавить fail-fast preflight по estimated budget до внешних LLM calls;
-- добавить настройки soft/hard cap behavior для локальных экспериментов;
-- отразить budget cap hits в run summary и verification/evaluation artifacts.
-- Acceptance:
-- можно явно ограничить стоимость одного documentation run;
-- cap violations объяснимы и не оставляют run без diagnostics.
-
 ### DOCS-014 — Добавить hygiene post-processing и source appendix
 - Priority: `P0`
 - Status: `completed`
@@ -1405,6 +1271,226 @@
 - commit evidence теперь строится как `change_events` с атомарными `sha`/`subject`/`path`/`status`/`change_type`/`current_file_state`;
 - prompt explicitly запрещает делать вывод о текущем отсутствии файла только по historical `deleted`;
 - добавлен regression test на image-board `docker-compose.yml`, где SHA, subject и статус не должны склеиваться между соседними коммитами.
+
+### DOCS-019 — Добавить optional per-run caps и budget guardrails
+- Priority: `P2`
+- Depends on: `DOCS-013`
+- Goal: позже добавить управляемые лимиты стоимости/объёма без блокировки текущего перехода к качественной генерации и verification.
+- Tasks:
+- добавить per-run caps: max sections, max input tokens, max output tokens, max judge calls, max estimated USD;
+- добавить fail-fast preflight по estimated budget до внешних LLM calls;
+- добавить настройки soft/hard cap behavior для локальных экспериментов;
+- отразить budget cap hits в run summary и verification/evaluation artifacts.
+- Acceptance:
+- можно явно ограничить стоимость одного documentation run;
+- cap violations объяснимы и не оставляют run без diagnostics.
+
+### DOCS-020 — Добавить structured observability для documentation pipeline
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-012`, `DOCS-008`, `DOCS-008B`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
+- Goal: failed/partial documentation run должен быть диагностируемым без ручного чтения MinIO/Postgres и без догадок по `httpx` логам.
+- Tasks:
+- ввести structured logs для `documentation_worker` и pipeline stages с обязательными полями: `documentation_run_id`, `attempt`, `repository_id`, `snapshot_id`, `template_kind`, `effective_template_kind`, `stage`, `section_key`, `repair_round`, `llm_task`, `artifact_kind`;
+- логировать template selection и repository classification: kind, confidence, top signals, selected template and reason;
+- логировать LLM call lifecycle: task, provider/model, prompt token estimate, source count, response id, finish reason, actual token usage, latency, retry attempt;
+- логировать artifact publication: artifact kind, storage key, schema version, size, checksum, section key;
+- публиковать `pipeline_trace.schema-v1.json` с компактным ordered event log по stage/section/LLM/artifact events;
+- публиковать partial diagnostic artifact при падении generation, verification или repair: failed task, section key, retryable flag, provider response metadata, last successful section, already published artifacts;
+- добавить `log_level`/`trace_artifact_enabled` config knobs, но production-like local default должен оставлять trace artifact включённым.
+- Acceptance:
+- по одному failed run можно понять, на какой секции/judge/repair call он упал и какие артефакты относятся к этой попытке;
+- логи показывают requested/effective template и почему classifier выбрал именно его;
+- failed run публикует machine-readable diagnostics даже если verification не дошёл до final report;
+- `pipeline_trace.schema-v1.json` не содержит полные prompt/response bodies и не раскрывает secrets.
+- Notes:
+- добавлен `pipeline_trace.schema-v1.json` с ordered events по stage, LLM, judge, repair и artifact publication;
+- добавлен `pipeline_error.schema-v1.json` для technical failures до финального verification report;
+- worker/pipeline логируют progress, template selection, LLM lifecycle и artifact publication key-value сообщениями;
+- добавлены `DOPDOC_DOCS_LOG_LEVEL` и `DOPDOC_DOCS_PIPELINE_TRACE_ENABLED`, trace включён по умолчанию.
+
+### DOCS-021 — Укрепить LLM call policy, JSON mode и retry на уровне вызова
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-010`, `DOCS-008`, `DOCS-020`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
+- Goal: один пустой ответ модели или битый JSON judge не должен переигрывать весь documentation run через job retry.
+- Tasks:
+- расширить `LlmClientConfig` и OpenAI/OpenRouter-compatible client поддержкой per-call `response_format`, включая JSON object mode для judge/structured tasks;
+- для verification judge включить JSON mode по умолчанию, если provider/model supports it; для обычной генерации оставить markdown mode;
+- добавить call-level retry wrapper для `section_generation`, `section_repair`, `section_judge`, `document_set_judge`: retry `llm_response_empty`, timeout, rate-limit/5xx, invalid judge JSON в пределах конкретного вызова;
+- при invalid judge JSON делать retry с более жёстким correction prompt / system reminder, не запуская заново generation stage;
+- после исчерпания call-level attempts публиковать `llm_call_error.schema-v1.json` или включать ошибку в `pipeline_trace`: task, section key, response id, finish reason, sanitized response excerpt, error code;
+- разделить retryable technical provider failures и quality verification failures: technical failures retry locally first, quality failures идут в repair loop или final failed report;
+- добавить unit tests на JSON mode request payload, empty response retry, invalid judge JSON retry и exhausted call-level failure.
+- Acceptance:
+- `verification_judge_invalid_response` не переводит run в job-level retry, пока не исчерпаны call-level attempts;
+- `llm_response_empty` на одной секции повторяет только эту секцию, а не весь run;
+- judge получает JSON-mode request, когда режим поддержан;
+- при exhausted call retry run содержит diagnostic artifact с section/task context.
+- Notes:
+- `LlmCompletionProvider.generate` получил per-call `response_format`, OpenRouter/OpenAI-compatible request теперь умеет JSON object mode;
+- judge использует JSON mode по умолчанию и retry correction message при invalid JSON;
+- `call_llm_with_retry` ретраит generation, repair, section judge и document-set judge на уровне конкретного вызова;
+- exhausted retries сохраняют task/section/attempt/retry metadata в exception details и diagnostic artifacts;
+- добавлены тесты на JSON-mode payload, retry пустого ответа, retry invalid judge JSON и trace sanitization.
+
+### DOCS-022 — Сделать documentation artifacts attempt-scoped и resumable
+- Priority: `P1`
+- Status: `completed`
+- Depends on: `DOCS-020`, `DOCS-021`
+- Artifact: [Documentation Evidence Packs And Prompt Contract](./architecture/documentation-prompt-contract.md)
+- Goal: повторные job attempts не должны смешивать артефакты разных попыток и не должны без необходимости терять уже успешно созданные секции.
+- Tasks:
+- добавить attempt-aware artifact key convention, например `documentation-runs/{run_id}/attempts/{attempt}/...`, и финальные stable pointers/artifacts только после successful verification;
+- включить `attempt` в metadata регистрации documentation artifacts и diagnostics;
+- разделить draft artifacts (`section_markdown`, attempts, partial documents, trace) и final artifacts (`documentation.md`, intent-based docs, manifest) на уровне key convention/artifact kind;
+- при job-level retry читать existing attempt state и решать, можно ли reuse уже completed sections или нужно начинать новый clean attempt;
+- не перезаписывать `generation_errors.schema-v1.json`, `verification_error.schema-v1.json`, `repair_attempts.schema-v1.json` от предыдущей попытки;
+- обновить cleanup/retention notes: старые attempts можно хранить для дипломных экспериментов, но final consumers должны видеть только final manifest/documentation artifacts.
+- Acceptance:
+- в MinIO/Postgres видно, какие artifacts принадлежат attempt 1/2/3;
+- failed run не выглядит как успешная смесь секций и repair attempts из разных попыток;
+- public/latest documentation consumers не получают draft artifacts;
+- повторный attempt может reuse безопасные завершённые секции или явно начинает новую isolated attempt.
+- Notes:
+- RepositoryService теперь хранит `attempt` в `repo.documentation_artifacts`, возвращает его в artifact DTO и умеет list artifacts by documentation run/attempt;
+- documentation worker публикует draft/debug artifacts под `documentation-runs/{run_id}/attempts/{attempt}/...`;
+- draft reader-facing artifacts получают `draft_*` artifact kinds, а stable `documentation.md`, intent docs и `manifest.schema-v2.json` публикуются только после успешной verification;
+- job-level retry читает existing artifact state и явно выбирает `clean_attempt`, фиксируя решение в `pipeline_trace`;
+- добавлена EF migration `20260525000100_AddDocumentationArtifactAttempt`.
+
+### DOCS-023 — Исправить classification и evidence scope для Go library/CLI репозиториев
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-016`, `DOCS-016B`, `DOCS-017`, `RAG-005`
+- Goal: Cobra-like repositories должны получать typed Go library/CLI documentation, а retrieval evidence не должен превращать consumer docs/examples в current-state claims о самом репозитории.
+- Tasks:
+- поправить classifier scoring: root Go module without HTTP/frontend/API specs should be `library`/`cli_tool` even if workspace role is currently `backend`;
+- добавить explicit signals for Go library packages: exported symbols, package name/module path, no runnable entrypoint package, docs package, CLI/Cobra terms;
+- добавить regression test на real-ish `spf13/cobra` artifact shape: `developer_handbook` request должен auto-select `go_library_handbook`;
+- пересмотреть retrieval queries/filters для Go library template: current architecture sections должны предпочитать runtime Go symbols/packages over `site/content/*` consumer docs;
+- помечать docs/user-guide retrieval as `consumer_example` или lower-priority source для claims о consuming applications, чтобы модель не утверждала наличие `main.go`/`cmd.Execute()` внутри библиотеки;
+- добавить prompt rule для Go library sections: distinguish repository implementation from examples showing how downstream applications use the library;
+- добавить verification check/warning для wrong-scope consumer-example claims, особенно в entry points / command lifecycle sections.
+- Acceptance:
+- для `spf13/cobra` effective template становится `go_library_handbook`;
+- generated docs не утверждают, что Cobra repository itself has `main.go`/`cmd.Execute()` entrypoint based only on `site/content/user_guide.md`;
+- retrieval sources in command lifecycle/public API sections are primarily runtime symbols and package graph evidence;
+- wrong-scope consumer-doc claims попадают в verification findings или repair plan.
+- Notes:
+- classifier downweights backend role for root Go module shapes without HTTP/frontend/API surface and adds explicit signals for root modules, exported symbols, docs packages and Cobra/CLI terms;
+- `go_library_handbook` section templates request `go`/`runtime` retrieval for current-state API/command/package sections and keep tests only where relevant;
+- prompt contract adds Go library rules that distinguish repository implementation from downstream consumer examples;
+- deterministic verification now warns on consumer example wrong-scope claims around `main.go`/`cmd.Execute()`;
+- added regression tests for Cobra-like backend-role artifacts, Go library retrieval scope and repair evidence expansion.
+
+### DOCS-024 — Отразить effective template в `GetDocumentationRun`
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-016`, `DOCS-020`, `DOCS-023`
+- Goal: публичный status endpoint должен показывать не только requested template, но и фактически выбранный typed template после auto-selection.
+- Tasks:
+- добавить nullable `EffectiveTemplateKind` в `repo.documentation_runs`;
+- выставлять effective template сразу после repository classification/template selection в documentation worker, до generation/verification;
+- вернуть в `GET /api/v1/documentation-runs/{id}` поля `requested_template_kind` и `effective_template_kind`;
+- сделать `template_kind` в response фактическим шаблоном, когда `effective_template_kind` уже известен, иначе fallback на requested template для queued runs;
+- сохранить active-run uniqueness по requested `TemplateKind`, чтобы auto-selection не ломала idempotency create endpoint.
+- Acceptance:
+- новый run, запрошенный как `developer_handbook`, после selection возвращает `template_kind=go_library_handbook` и `requested_template_kind=developer_handbook`;
+- failed verification runs тоже сохраняют effective template в Postgres;
+- старые runs без нового поля остаются совместимыми и возвращают requested template.
+- Notes:
+- добавлена EF migration `20260525000200_AddDocumentationRunEffectiveTemplateKind`;
+- `documentation_service` обновляет `EffectiveTemplateKind` через job store callback сразу после template selection;
+- `DocumentationRunResponse` теперь содержит `requested_template_kind`/`effective_template_kind`, а legacy `template_kind` становится effective-or-requested alias.
+
+### DOCS-025 — Ужать и стабилизировать LLM judge
+- Priority: `P0`
+- Depends on: `DOCS-008`, `DOCS-008B`, `DOCS-020`, `DOCS-021`
+- Status: `completed`
+- Goal: verification должна оставаться строгой по фактам, но не тратить основной бюджет run на длинные, самопротиворечивые judge-ответы и повторную проверку неизменённых секций.
+- Tasks:
+- пересмотреть section/document-set judge JSON contract: короткие enum-поля, compact findings, `confidence`, `evidence_source_ids`, `repair_strategy`, без развёрнутых рассуждений в свободном тексте;
+- добавить validation/normalization layer после judge: inconsistent findings (`severity=error`, но текст/strategy говорит `no_issue`) не должны становиться hard failure;
+- ограничить количество findings на секцию и требовать от judge выбирать только material issues, влияющие на groundedness/coverage/usefulness;
+- разделить severity policy: hard error только для подтверждённых unsupported/contradicted/wrong-scope claims, остальное warning/info;
+- после repair повторно judge-ить только repaired sections и document-set consistency, а verdicts неизменённых секций переносить из предыдущего report;
+- в логах и report явно различать initial verification, post-repair verification и carried-over verdicts.
+- Acceptance:
+- Cobra-like run не падает из-за self-contradictory judge finding;
+- post-repair verification не повторяет LLM judge для всех неизменённых секций;
+- verification report показывает, какие findings были normalized/dropped и почему;
+- judge completion tokens заметно меньше generation/repair tokens, без отключения LLM judge как класса.
+- Notes:
+- judge prompt получает compact evidence pack/source index/generated markdown/claim list и просит короткий JSON с `confidence`/`repair_strategy`;
+- добавлена post-judge normalization: self-contradictory findings становятся `info`, broad coverage/usefulness замечания становятся warning, hard errors остаются только для подтверждённых unsupported/contradicted/wrong-scope или точечных `expand_evidence` gaps;
+- post-repair verification переносит LLM verdicts неизменённых секций из предыдущего report и повторно judge-ит только repaired sections + document-set consistency;
+- `verification_report` теперь содержит `judge_normalizations` и `carried_over_judge_sections`.
+
+### DOCS-026 — Ограничить targeted repair evidence и repair prompts
+- Priority: `P0`
+- Depends on: `DOCS-008C`, `RAG-005`, `DOCS-025`
+- Status: `completed`
+- Goal: repair должен добирать только действительно нужные факты, а не раздувать контекст десятками retrieval sources и случайными соседними chunks.
+- Tasks:
+- ввести per-section repair evidence budget: max delta sources, max retrieval queries, max source-neighborhood lookups и max rendered delta tokens;
+- запускать targeted retrieval только для precise evidence gaps (`missing_coverage`, `not_enough_evidence` по `must_cover`), а `remove_claim`/`rewrite_existing` выполнять без retrieval;
+- отключить source-neighborhood expansion по умолчанию; включать его только если finding содержит точный `file_path`, `symbol_name` или `source_id`;
+- улучшить filters для repair retrieval: language/source_scope/workspace_unit/kind должны наследоваться из section template и finding hints;
+- дедуплицировать delta sources against original evidence and previous repair rounds;
+- repair token estimate должен учитывать original markdown, findings, rendered original evidence, delta evidence and repair instructions, а не только section source count;
+- в `repair_evidence_delta` фиксировать skipped retrieval reasons, applied caps and discarded low-signal results.
+- Acceptance:
+- repair prompts для Cobra sections не раздуваются до десятков тысяч tokens без явной причины;
+- `build_run_test` не получает runtime `command.go` symbols при поиске evidence про Makefile/CI;
+- отсутствие targeted evidence приводит к удалению/смягчению claim, а не к расширению поиска до произвольных sources;
+- `repair_evidence_delta` объясняет, почему retrieval был выполнен, ограничен или пропущен.
+- Notes:
+- targeted retrieval запускается только для `missing_coverage`/`not_enough_evidence` с `repair_strategy=expand_evidence` и конкретными hints/evidence_needed;
+- repair evidence ограничен caps: `max_queries_per_section=4`, `max_delta_sources_per_section=3`, `max_delta_sources_per_finding=1`, `max_neighborhood_lookups_per_section=1`;
+- `remove_claim`, `rewrite_existing`, contradicted/wrong-scope/citation/output/readability findings чинятся без retrieval;
+- delta filters наследуют retrieval scope секции, file path hints и Go-library правила; `build_run_test` не принимает `go_symbol` matches как evidence для build/CI claims;
+- repair generation metadata теперь содержит более честный `estimated_input_tokens` с учётом current markdown, findings, original prompt payload and repair evidence delta.
+
+### DOCS-027 — Переделать `known_gaps` в deterministic analysis limitations
+- Priority: `P0`
+- Depends on: `DOCS-009`, `DOCS-015`, `DOCS-025`, `DOCS-026`
+- Status: `completed`
+- Goal: секция gaps не должна утверждать отсутствие файлов/API в репозитории только потому, что они не попали в текущую evidence выборку.
+- Tasks:
+- заменить `known_gaps` на `analysis_limitations` либо изменить смысл секции: описывать ограничения текущего analysis run, а не дефекты проекта;
+- строить базовое содержимое секции детерминированно из `omitted_sources`, `truncated_sources`, unsupported/generated-file filters, failed retrieval queries, unresolved verification findings и unavailable artifacts;
+- запретить generic retrieval для этой секции; targeted retrieval применять только для проверки конкретного known file/symbol claim, если он уже есть в evidence metadata;
+- prompt должен явно различать "not present in evidence" и "not present in repository";
+- verification для этой секции должна считать absence claims hard error, если они не подтверждены structured artifact inventory.
+- Acceptance:
+- секция больше не пишет "файл отсутствует" на основании неполной выборки;
+- Cobra docs не получают ложные gaps про markdown/yaml/doc generation только из-за retrieval miss;
+- repair для limitations-секции обычно rewrite-only и не запускает широкий retrieval;
+- итоговая секция полезна как audit trail качества анализа, а не как сомнительная критика репозитория.
+- Notes:
+- typed templates теперь используют `analysis_limitations` вместо `known_gaps`;
+- для этой секции generic retrieval и LLM generation отключены: content строится детерминированно из evidence metadata/warnings/summary и явно говорит, что отсутствие в evidence не означает отсутствие в repository;
+- prompt/verification policy запрещает repository absence claims без structured подтверждения;
+- deterministic verifier считает unscoped absence claims в `analysis_limitations` hard error.
+
+### DOCS-028 — Довести run-level usage accounting и trace до уровня экспериментов
+- Priority: `P1`
+- Depends on: `DOCS-013`, `DOCS-020`, `DOCS-025`, `DOCS-026`
+- Goal: после дорогого run должно быть видно полную стоимость и причину расхода токенов по стадиям, repair rounds и judge calls.
+- Tasks:
+- добавить actual token usage в `pipeline_trace` events для generation, initial judge, repair, post-repair judge and document-set judge;
+- агрегировать usage по стадиям: `generation`, `verification_initial`, `repair_generation`, `repair_retrieval`, `verification_post_repair`, `document_assembly`;
+- считать total run usage across all verification rounds, а не только последний `verification_report.summary`;
+- сравнивать `estimated_input_tokens` vs actual prompt tokens и помечать large estimation drift;
+- в `manifest.schema-v2.json`/run summary сохранить compact usage table per section/task/round;
+- подготовить данные для дипломных экспериментов: model/provider, latency, token totals, rough cost, quality status and failed sections.
+- Acceptance:
+- по одному manifest/trace можно объяснить, почему Cobra run потратил сотни тысяч tokens;
+- repair estimate drift виден явно и не требует чтения container logs;
+- run-level accounting пригоден для сравнения нескольких моделей/настроек без ручного парсинга MinIO artifacts.
 
 ## Epic GATEWAY — Public API Integration
 

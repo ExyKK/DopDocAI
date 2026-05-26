@@ -151,6 +151,12 @@ def _developer_instructions(output_language: str, *, template_kind: str) -> str:
                 "Use docs/user-guide/example evidence only as usage examples unless runtime symbols/packages confirm repository implementation behavior.",
             ]
         )
+    instructions.extend(
+        [
+            "For an Analysis Limitations section, describe limits of the current evidence and analysis run only.",
+            "Never claim that a file, function, API, command or dependency is absent from the repository just because it is absent from selected evidence or retrieval results.",
+        ]
+    )
     return "\n".join(instructions)
 
 

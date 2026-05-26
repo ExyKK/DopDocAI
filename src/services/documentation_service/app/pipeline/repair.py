@@ -84,19 +84,16 @@ def build_repair_plan(report: VerificationReport) -> RepairPlan:
 
 
 def finding_requires_targeted_retrieval(finding: VerificationFinding) -> bool:
-    if finding.repair_strategy == "expand_evidence":
-        return finding.category not in _RETRIEVAL_BLOCKED_CATEGORIES
-    if finding.category in _RETRIEVAL_NEEDED_CATEGORIES:
-        return True
-    if finding.category == "unsupported_claim":
-        return bool(finding.evidence_needed or finding.retrieval_hints)
-    return False
+    if finding.repair_strategy != "expand_evidence":
+        return False
+    if finding.category not in _RETRIEVAL_NEEDED_CATEGORIES:
+        return False
+    return bool(finding.evidence_needed or finding.retrieval_hints)
 
 
 _RETRIEVAL_NEEDED_CATEGORIES = {
     "missing_coverage",
     "not_enough_evidence",
-    "weak_evidence",
 }
 _RETRIEVAL_BLOCKED_CATEGORIES = {
     "contradicted_claim",

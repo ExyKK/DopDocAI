@@ -16,7 +16,7 @@ from app.pipeline.evidence_pack import (
     build_evidence_pack_manifest,
 )
 from app.pipeline.generator import DeveloperHandbookGenerator, GeneratedDocument, GeneratedSection
-from app.pipeline.llm_generation import LlmSectionGenerator
+from app.pipeline.llm_generation import LlmSectionGenerator, build_analysis_limitations_section
 from app.pipeline.pipeline_trace import PipelineTrace, error_payload
 from app.pipeline.prompt_contract import (
     SectionPromptContract,
@@ -257,7 +257,10 @@ class DocumentationGenerationPipeline:
                 estimated_input_tokens=contract.estimated_input_tokens,
             )
             try:
-                generated = self._section_generator.generate_section(contract)
+                if contract.section_key == "analysis_limitations":
+                    generated = build_analysis_limitations_section(contract)
+                else:
+                    generated = self._section_generator.generate_section(contract)
             except Exception as exc:
                 self._set_failure_context(
                     stage="generating_sections",
@@ -303,6 +306,7 @@ class DocumentationGenerationPipeline:
         repair_evidence_delta_artifacts: list[dict[str, Any]] = []
         contract_by_section = {contract.section_key: contract for contract in prompt_contracts}
 
+        repaired_section_keys_for_next_verification: set[str] | None = None
         for repair_round in range(self._max_repair_rounds + 1):
             report_progress(
                 "verifying_documentation",
@@ -334,6 +338,8 @@ class DocumentationGenerationPipeline:
                     manifest=current_manifest,
                     contracts=prompt_contracts,
                     repair_round=repair_round,
+                    previous_report=verification_reports[-1] if verification_reports else None,
+                    judge_section_keys=repaired_section_keys_for_next_verification,
                 )
             except Exception:
                 self._set_failure_context(
@@ -360,6 +366,9 @@ class DocumentationGenerationPipeline:
             repair_plans.append(plan)
             if not plan.has_repairs() or plan.unresolved_findings:
                 break
+            repaired_section_keys_for_next_verification = {
+                section_plan.section_key for section_plan in plan.sections
+            }
 
             repair_evidence_delta = build_repair_evidence_delta(
                 documentation_run_id=run.id,
@@ -1025,6 +1034,8 @@ class DocumentationGenerationPipeline:
             prompt_tokens=generation.get("prompt_tokens"),
             completion_tokens=generation.get("completion_tokens"),
             total_tokens=generation.get("total_tokens"),
+            estimated_input_tokens=generation.get("estimated_input_tokens"),
+            base_contract_estimated_input_tokens=generation.get("base_contract_estimated_input_tokens"),
             latency_ms=generation.get("latency_ms"),
             attempts_total=generation.get("llm_attempts_total"),
             retry_errors_total=len(retry_errors) if isinstance(retry_errors, list) else 0,
@@ -1040,6 +1051,8 @@ class DocumentationGenerationPipeline:
             repair_round=report.repair_round,
             status=report.status,
             judge_calls_total=summary.get("judge_calls_total"),
+            judge_normalizations_total=summary.get("judge_normalizations_total"),
+            carried_over_judge_sections_total=summary.get("carried_over_judge_sections_total"),
             errors_total=summary.get("errors_total"),
             warnings_total=summary.get("warnings_total"),
             repairable_errors_total=summary.get("repairable_errors_total"),

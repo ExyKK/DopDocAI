@@ -39,6 +39,8 @@ class VerificationFinding:
     evidence_needed: str | None = None
     repair_strategy: str | None = None
     retrieval_hints: list[str] = field(default_factory=list)
+    confidence: float | None = None
+    normalization: dict[str, Any] | None = None
     origin: str = "deterministic"
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,6 +58,8 @@ class VerificationFinding:
             "evidence_needed": self.evidence_needed,
             "repair_strategy": self.repair_strategy,
             "retrieval_hints": self.retrieval_hints,
+            "confidence": self.confidence,
+            "normalization": self.normalization,
             "origin": self.origin,
         }
 
@@ -106,6 +110,8 @@ class VerificationReport:
     judge_calls: list[JudgeCallMetadata] = field(default_factory=list)
     section_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
     document_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
+    judge_normalizations: list[dict[str, Any]] = field(default_factory=list)
+    carried_over_judge_sections: list[str] = field(default_factory=list)
 
     @property
     def status(self) -> VerificationStatus:
@@ -138,6 +144,9 @@ class VerificationReport:
             "judge_completion_tokens": _sum_int(call.completion_tokens for call in self.judge_calls),
             "judge_total_tokens": _sum_int(call.total_tokens for call in self.judge_calls),
             "judge_latency_ms": _sum_int(call.latency_ms for call in self.judge_calls),
+            "judge_normalizations_total": len(self.judge_normalizations),
+            "carried_over_judge_sections_total": len(set(self.carried_over_judge_sections)),
+            "carried_over_judge_sections": sorted(set(self.carried_over_judge_sections)),
             "failed_sections": sorted(
                 {
                     finding.section_key
@@ -172,6 +181,8 @@ class VerificationReport:
             "section_scores": self.section_scores,
             "document_scores": self.document_scores,
             "judge_calls": [call.to_dict() for call in self.judge_calls],
+            "judge_normalizations": self.judge_normalizations,
+            "carried_over_judge_sections": sorted(set(self.carried_over_judge_sections)),
         }
 
 
@@ -204,9 +215,13 @@ class DocumentationVerifier:
         manifest: dict[str, Any],
         contracts: list[SectionPromptContract],
         repair_round: int = 0,
+        previous_report: VerificationReport | None = None,
+        judge_section_keys: set[str] | None = None,
     ) -> VerificationReport:
         effective_mode = self._effective_mode()
         contract_by_section = {contract.section_key: contract for contract in contracts}
+        previous_findings = _previous_llm_findings_by_section(previous_report)
+        previous_scores = dict(previous_report.section_scores) if previous_report else {}
         findings = _deterministic_findings(
             sections=sections,
             documents=documents,
@@ -216,15 +231,34 @@ class DocumentationVerifier:
         judge_calls: list[JudgeCallMetadata] = []
         section_scores: dict[str, dict[str, Any]] = {}
         document_scores: dict[str, dict[str, Any]] = {}
+        judge_normalizations: list[dict[str, Any]] = []
+        carried_over_judge_sections: list[str] = []
 
         if effective_mode in {"llm", "hybrid"}:
             for section in sections:
                 contract = contract_by_section.get(section.section_key)
                 if contract is None:
                     continue
+                if not _section_requires_llm_judge(section):
+                    continue
+                if judge_section_keys is not None and section.section_key not in judge_section_keys:
+                    carried = previous_findings.get(section.section_key, [])
+                    findings.extend(carried)
+                    if section.section_key in previous_scores:
+                        section_scores[section.section_key] = previous_scores[section.section_key]
+                    if carried or section.section_key in previous_scores:
+                        carried_over_judge_sections.append(section.section_key)
+                    continue
                 verdict, call = self._judge_section(section, contract)
                 judge_calls.append(call)
-                findings.extend(_findings_from_judge(verdict, scope="section", section_key=section.section_key))
+                new_findings, normalizations = _findings_from_judge(
+                    verdict,
+                    scope="section",
+                    section_key=section.section_key,
+                    max_findings=4,
+                )
+                findings.extend(new_findings)
+                judge_normalizations.extend(normalizations)
                 scores = verdict.get("scores")
                 if isinstance(scores, dict):
                     section_scores[section.section_key] = scores
@@ -235,7 +269,14 @@ class DocumentationVerifier:
                 template_kind=template_kind,
             )
             judge_calls.append(call)
-            findings.extend(_findings_from_judge(verdict, scope="document_set", section_key=None))
+            new_findings, normalizations = _findings_from_judge(
+                verdict,
+                scope="document_set",
+                section_key=None,
+                max_findings=5,
+            )
+            findings.extend(new_findings)
+            judge_normalizations.extend(normalizations)
             scores = verdict.get("scores")
             if isinstance(scores, dict):
                 document_scores["document_set"] = scores
@@ -253,6 +294,8 @@ class DocumentationVerifier:
             judge_calls=judge_calls,
             section_scores=section_scores,
             document_scores=document_scores,
+            judge_normalizations=judge_normalizations,
+            carried_over_judge_sections=carried_over_judge_sections,
         )
 
     def _effective_mode(self) -> VerificationMode:
@@ -496,6 +539,7 @@ def _section_findings(
         )
 
     findings.extend(_go_library_consumer_scope_findings(section, body, contract))
+    findings.extend(_analysis_limitations_absence_findings(section, body))
 
     generation = section.generation or {}
     if generation.get("finish_reason") == "length":
@@ -545,10 +589,12 @@ def _section_judge_payload(
         },
         "section_spec": contract.section_spec,
         "allowed_source_ids": contract.source_ids,
-        "source_index": contract.source_index,
-        "generated_markdown": _truncate(section.content_markdown, 16000),
-        "extracted_claims": _extract_claims(section.content_markdown),
-        "rendered_evidence_pack": prompt_payload.get("evidence_pack", {}),
+        "source_index": contract.source_index[:16],
+        "generated_markdown": _truncate(section.content_markdown, 9000),
+        "extracted_claims": _extract_claims(section.content_markdown, limit=20),
+        "rendered_evidence_pack": _compact_evidence_pack_for_judge(
+            prompt_payload.get("evidence_pack", {})
+        ),
         "checks": [
             "Every factual technical claim should be supported by cited evidence.",
             "Unsupported or contradicted claims about files, APIs, commands or config are errors.",
@@ -572,12 +618,13 @@ def _judge_messages(payload: dict[str, Any]) -> list[LlmMessage]:
         "findings": [
             {
                 "severity": "error|warning|info",
-                "category": "unsupported_claim|contradicted_claim|missing_coverage|weak_evidence|duplication|wrong_scope|readability|other",
+                "category": "unsupported_claim|contradicted_claim|missing_coverage|not_enough_evidence|weak_evidence|duplication|wrong_scope|readability|other",
                 "message": "short explanation",
                 "claim": "optional claim text",
                 "section_key": "optional section key",
                 "document_key": "optional document key",
                 "source_ids": ["S1"],
+                "confidence": 0.0,
                 "repairable": True,
                 "suggested_fix": "specific correction",
                 "evidence_needed": "optional missing evidence",
@@ -601,9 +648,14 @@ def _judge_messages(payload: dict[str, Any]) -> list[LlmMessage]:
                 "Validate groundedness, usefulness, coverage and scope. "
                 "Treat unsupported or contradicted technical claims about files, APIs, commands, "
                 "dependencies or configuration as error findings. "
-                "Use repair_strategy=expand_evidence only when a missing fact could be resolved by targeted repository retrieval. "
+                "Return at most four findings for a section and only material issues. "
+                "Use short messages; do not include long reasoning or self-correction prose. "
+                "Use severity=error only for confirmed unsupported_claim, contradicted_claim or wrong_scope issues. "
+                "Use severity=warning for weak usefulness, duplication, weak evidence and broad missing coverage. "
+                "Use severity=error for missing coverage only when the gap is precise, repair_strategy=expand_evidence, "
+                "and evidence_needed/retrieval_hints identify concrete files, symbols or commands. "
+                "Use repair_strategy=expand_evidence only for precise missing evidence with concrete retrieval_hints. "
                 "Use repair_strategy=remove_claim for contradicted or wrong-scope claims. "
-                "Treat weak usefulness, duplication and missing coverage as warning findings. "
                 "Use this exact JSON shape: "
                 f"{json.dumps(schema, ensure_ascii=False)}"
             ),
@@ -667,14 +719,57 @@ def _findings_from_judge(
     *,
     scope: str,
     section_key: str | None,
-) -> list[VerificationFinding]:
+    max_findings: int,
+) -> tuple[list[VerificationFinding], list[dict[str, Any]]]:
     findings: list[VerificationFinding] = []
+    normalizations: list[dict[str, Any]] = []
     for index, item in enumerate(payload.get("findings") or [], start=1):
         if not isinstance(item, dict):
+            continue
+        if len(findings) >= max_findings:
+            normalizations.append(
+                {
+                    "scope": scope,
+                    "section_key": section_key,
+                    "finding_index": index,
+                    "action": "dropped",
+                    "reason": "max_material_findings_exceeded",
+                }
+            )
             continue
         severity = _enum(item.get("severity"), {"error", "warning", "info"}, default="warning")
         category = _optional_str(item.get("category")) or "other"
         finding_section_key = _optional_str(item.get("section_key")) or section_key
+        confidence = _optional_float(item.get("confidence"))
+        repair_strategy = _enum(
+            item.get("repair_strategy"),
+            {"rewrite_existing", "expand_evidence", "remove_claim"},
+            default="rewrite_existing",
+        )
+        evidence_needed = _optional_str(item.get("evidence_needed"))
+        retrieval_hints = _string_list(item.get("retrieval_hints"), limit=5)
+        severity, repairable, repair_strategy, normalization = _normalize_judge_finding(
+            severity=severity,
+            category=category,
+            message=_optional_str(item.get("message")) or "",
+            claim=_optional_str(item.get("claim")),
+            suggested_fix=_optional_str(item.get("suggested_fix")),
+            evidence_needed=evidence_needed,
+            retrieval_hints=retrieval_hints,
+            repair_strategy=repair_strategy,
+            confidence=confidence,
+            requested_repairable=bool(item.get("repairable", severity == "error")),
+        )
+        if normalization is not None:
+            normalization.update(
+                {
+                    "scope": scope,
+                    "section_key": finding_section_key,
+                    "finding_index": index,
+                    "category": category,
+                }
+            )
+            normalizations.append(normalization)
         findings.append(
             VerificationFinding(
                 check_id=f"llm_judge_{scope}_{index}",
@@ -689,19 +784,17 @@ def _findings_from_judge(
                     for source_id in item.get("source_ids") or []
                     if isinstance(source_id, str)
                 ],
-                repairable=bool(item.get("repairable", severity == "error")),
+                repairable=repairable,
                 suggested_fix=_optional_str(item.get("suggested_fix")),
-                evidence_needed=_optional_str(item.get("evidence_needed")),
-                repair_strategy=_enum(
-                    item.get("repair_strategy"),
-                    {"rewrite_existing", "expand_evidence", "remove_claim"},
-                    default="rewrite_existing",
-                ),
-                retrieval_hints=_string_list(item.get("retrieval_hints"), limit=5),
+                evidence_needed=evidence_needed,
+                repair_strategy=repair_strategy,
+                retrieval_hints=retrieval_hints,
+                confidence=confidence,
+                normalization=normalization,
                 origin="llm_judge",
             )
         )
-    return findings
+    return findings, normalizations
 
 
 def _call_metadata(
@@ -750,6 +843,57 @@ def _citations(markdown: str) -> set[str]:
 
 def _body_without_sources(markdown: str) -> str:
     return (markdown or "").split("### Sources", 1)[0].strip()
+
+
+def _section_requires_llm_judge(section: GeneratedSection) -> bool:
+    return section.section_key != "analysis_limitations"
+
+
+def _previous_llm_findings_by_section(
+    report: VerificationReport | None,
+) -> dict[str, list[VerificationFinding]]:
+    result: dict[str, list[VerificationFinding]] = {}
+    if report is None:
+        return result
+
+    for finding in report.findings:
+        if finding.origin != "llm_judge" or not finding.section_key:
+            continue
+        result.setdefault(finding.section_key, []).append(finding)
+    return result
+
+
+def _compact_evidence_pack_for_judge(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    sources = value.get("sources")
+    compact_sources: list[dict[str, Any]] = []
+    if isinstance(sources, list):
+        for source in sources[:12]:
+            if not isinstance(source, dict):
+                continue
+            compact_sources.append(
+                {
+                    "source_id": source.get("source_id"),
+                    "title": source.get("title"),
+                    "source_kind": source.get("source_kind"),
+                    "file_path": source.get("file_path"),
+                    "symbol_name": source.get("symbol_name"),
+                    "line_range": source.get("line_range"),
+                    "source_scope": source.get("source_scope"),
+                    "content_markdown": _truncate(str(source.get("content_markdown") or ""), 1400),
+                }
+            )
+
+    return {
+        "schema_version": value.get("schema_version"),
+        "format": value.get("format"),
+        "source_ids": list(value.get("source_ids") or [])[:16],
+        "raw_evidence_summary": value.get("raw_evidence_summary") or {},
+        "warnings": list(value.get("warnings") or [])[:12],
+        "sources": compact_sources,
+    }
 
 
 def _extract_claims(markdown: str, *, limit: int = 32) -> list[dict[str, Any]]:
@@ -870,6 +1014,43 @@ def _go_library_consumer_scope_findings(
     return findings
 
 
+def _analysis_limitations_absence_findings(
+    section: GeneratedSection,
+    body: str,
+) -> list[VerificationFinding]:
+    if section.section_key not in {"analysis_limitations", "known_gaps"}:
+        return []
+
+    findings: list[VerificationFinding] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if not _line_makes_absence_claim(lowered):
+            continue
+        if _line_scopes_absence_to_evidence(lowered):
+            continue
+        findings.append(
+            VerificationFinding(
+                check_id="analysis_limitations_repository_absence_claim",
+                severity="error",
+                category="wrong_scope",
+                section_key=section.section_key,
+                message=(
+                    "Analysis limitations section claims repository absence instead of "
+                    "scoping the limitation to selected evidence."
+                ),
+                claim=_truncate(stripped, 600),
+                repairable=True,
+                suggested_fix=(
+                    "Rewrite the claim as 'not present in selected evidence' or remove it."
+                ),
+                repair_strategy="rewrite_existing",
+                origin="deterministic",
+            )
+        )
+    return findings
+
+
 def _consumer_example_source_ids(source_index: list[dict[str, Any]]) -> set[str]:
     result: set[str] = set()
     for source in source_index:
@@ -925,6 +1106,39 @@ def _line_claims_repository_scope(line: str) -> bool:
     )
 
 
+def _line_makes_absence_claim(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in (
+            "отсутств",
+            "не найден",
+            "не обнаруж",
+            "нет файла",
+            "нет функции",
+            "missing from the repository",
+            "not present in the repository",
+            "does not exist",
+            "absent from the repository",
+        )
+    )
+
+
+def _line_scopes_absence_to_evidence(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in (
+            "evidence",
+            "выборк",
+            "источник",
+            "доказател",
+            "retrieval",
+            "prompt",
+            "analysis run",
+            "selected sources",
+        )
+    )
+
+
 def _looks_like_raw_json_dump(markdown: str) -> bool:
     text = markdown.strip()
     if "```json" in text.lower():
@@ -965,6 +1179,136 @@ def _string_list(value: Any, *, limit: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+_HARD_LLM_CATEGORIES = {
+    "unsupported_claim",
+    "contradicted_claim",
+    "wrong_scope",
+}
+_WARNING_ONLY_LLM_CATEGORIES = {
+    "missing_coverage",
+    "weak_evidence",
+    "duplication",
+    "readability",
+    "other",
+}
+_TARGETED_EVIDENCE_GAP_CATEGORIES = {
+    "missing_coverage",
+    "not_enough_evidence",
+}
+_NO_ISSUE_MARKERS = (
+    "no issue",
+    "no actual",
+    "no contradiction",
+    "actually supported",
+    "already supported",
+    "supported by",
+    "no fix needed",
+    "not an issue",
+    "без ошибки",
+    "нет ошибки",
+    "не является ошибкой",
+    "подтвержден",
+    "поддержан",
+)
+
+
+def _normalize_judge_finding(
+    *,
+    severity: str,
+    category: str,
+    message: str,
+    claim: str | None,
+    suggested_fix: str | None,
+    evidence_needed: str | None,
+    retrieval_hints: list[str],
+    repair_strategy: str,
+    confidence: float | None,
+    requested_repairable: bool,
+) -> tuple[str, bool, str, dict[str, Any] | None]:
+    normalized_severity = severity
+    normalized_repairable = requested_repairable
+    normalized_strategy = repair_strategy
+    reasons: list[str] = []
+
+    combined_text = " ".join(
+        item for item in (message, claim or "", suggested_fix or "") if item
+    ).lower()
+    has_precise_evidence_target = bool(evidence_needed or retrieval_hints)
+    is_targeted_evidence_gap = (
+        category in _TARGETED_EVIDENCE_GAP_CATEGORIES
+        and repair_strategy == "expand_evidence"
+        and has_precise_evidence_target
+        and (confidence is None or confidence >= 0.65)
+    )
+
+    if normalized_severity == "error" and any(marker in combined_text for marker in _NO_ISSUE_MARKERS):
+        normalized_severity = "info"
+        normalized_repairable = False
+        normalized_strategy = "rewrite_existing"
+        reasons.append("judge_message_indicates_no_material_issue")
+
+    if (
+        normalized_severity == "error"
+        and category in _WARNING_ONLY_LLM_CATEGORIES
+        and not is_targeted_evidence_gap
+    ):
+        normalized_severity = "warning"
+        reasons.append("category_is_not_hard_error")
+
+    if (
+        normalized_severity == "error"
+        and category not in _HARD_LLM_CATEGORIES
+        and not is_targeted_evidence_gap
+    ):
+        normalized_severity = "warning"
+        reasons.append("category_not_allowed_as_llm_hard_error")
+
+    if normalized_severity == "error" and confidence is not None and confidence < 0.55:
+        normalized_severity = "warning"
+        reasons.append("low_confidence_hard_error_downgraded")
+
+    if normalized_strategy == "expand_evidence" and category not in {
+        "missing_coverage",
+        "not_enough_evidence",
+    }:
+        normalized_strategy = "rewrite_existing"
+        reasons.append("expand_evidence_disallowed_for_category")
+
+    if normalized_severity != "error" and normalized_strategy == "expand_evidence":
+        normalized_strategy = "rewrite_existing"
+        reasons.append("non_error_expand_evidence_downgraded")
+
+    if normalized_severity != "error":
+        normalized_repairable = False if normalized_severity == "info" else normalized_repairable
+
+    normalization = None
+    if reasons:
+        normalization = {
+            "action": "normalized",
+            "reasons": reasons,
+            "original_severity": severity,
+            "normalized_severity": normalized_severity,
+            "original_repair_strategy": repair_strategy,
+            "normalized_repair_strategy": normalized_strategy,
+        }
+
+    return normalized_severity, normalized_repairable, normalized_strategy, normalization
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return 0.0
+    if number > 1:
+        return 1.0
+    return number
 
 
 def _truncate(value: str, max_length: int) -> str:
