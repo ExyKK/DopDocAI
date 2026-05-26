@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.infra.llm_client import LlmCompletionProvider
 from app.infra.object_storage import ObjectStorageClient
@@ -108,6 +108,7 @@ class DocumentationGenerationPipeline:
         run: ClaimedDocumentationRun,
         *,
         report_progress,
+        report_template_selection: Callable[[str], None] | None = None,
     ) -> DocumentationPlanResult:
         self._trace = self._new_trace(run)
         self._published_artifacts = []
@@ -123,7 +124,11 @@ class DocumentationGenerationPipeline:
         )
         self._record_attempt_state(run)
         try:
-            return self._build_developer_handbook(run, report_progress=report_progress)
+            return self._build_developer_handbook(
+                run,
+                report_progress=report_progress,
+                report_template_selection=report_template_selection,
+            )
         except Exception as exc:
             context = self._failure_context or {}
             self._publish_pipeline_error_safely(
@@ -146,6 +151,7 @@ class DocumentationGenerationPipeline:
         run: ClaimedDocumentationRun,
         *,
         report_progress,
+        report_template_selection: Callable[[str], None] | None,
     ) -> DocumentationPlanResult:
         report_progress("loading_project_model", 20)
         self._record_trace("stage_started", stage="loading_project_model", progress_pct=20)
@@ -162,6 +168,8 @@ class DocumentationGenerationPipeline:
             template_selection=template_selection.to_dict(),
             repository_classification=repository_classification.to_dict(),
         )
+        if report_template_selection is not None:
+            report_template_selection(effective_template_kind)
 
         report_progress("planning_sections", 35, progress_total=len(templates))
         self._record_trace(

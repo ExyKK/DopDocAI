@@ -62,13 +62,19 @@ internal static class RunContractMapper
 
     public static DocumentationRunResponse ToResponse(DocumentationRun run)
     {
+        var effectiveTemplateKind = string.IsNullOrWhiteSpace(run.EffectiveTemplateKind)
+            ? null
+            : run.EffectiveTemplateKind;
+
         return new DocumentationRunResponse(
             Id: run.Id,
             RepositoryId: run.RepositoryId,
             SnapshotId: run.SnapshotId,
             SourceIndexRunId: run.SourceIndexRunId,
             BaseSnapshotId: run.BaseSnapshotId,
-            TemplateKind: run.TemplateKind,
+            TemplateKind: effectiveTemplateKind ?? run.TemplateKind,
+            RequestedTemplateKind: run.TemplateKind,
+            EffectiveTemplateKind: effectiveTemplateKind,
             Status: run.Status,
             Stage: run.Stage,
             ProgressPct: run.ProgressPct,

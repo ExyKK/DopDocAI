@@ -1243,6 +1243,26 @@
 - deterministic verification now warns on consumer example wrong-scope claims around `main.go`/`cmd.Execute()`;
 - added regression tests for Cobra-like backend-role artifacts, Go library retrieval scope and repair evidence expansion.
 
+### DOCS-024 — Отразить effective template в `GetDocumentationRun`
+- Priority: `P0`
+- Status: `completed`
+- Depends on: `DOCS-016`, `DOCS-020`, `DOCS-023`
+- Goal: публичный status endpoint должен показывать не только requested template, но и фактически выбранный typed template после auto-selection.
+- Tasks:
+- добавить nullable `EffectiveTemplateKind` в `repo.documentation_runs`;
+- выставлять effective template сразу после repository classification/template selection в documentation worker, до generation/verification;
+- вернуть в `GET /api/v1/documentation-runs/{id}` поля `requested_template_kind` и `effective_template_kind`;
+- сделать `template_kind` в response фактическим шаблоном, когда `effective_template_kind` уже известен, иначе fallback на requested template для queued runs;
+- сохранить active-run uniqueness по requested `TemplateKind`, чтобы auto-selection не ломала idempotency create endpoint.
+- Acceptance:
+- новый run, запрошенный как `developer_handbook`, после selection возвращает `template_kind=go_library_handbook` и `requested_template_kind=developer_handbook`;
+- failed verification runs тоже сохраняют effective template в Postgres;
+- старые runs без нового поля остаются совместимыми и возвращают requested template.
+- Notes:
+- добавлена EF migration `20260525000200_AddDocumentationRunEffectiveTemplateKind`;
+- `documentation_service` обновляет `EffectiveTemplateKind` через job store callback сразу после template selection;
+- `DocumentationRunResponse` теперь содержит `requested_template_kind`/`effective_template_kind`, а legacy `template_kind` становится effective-or-requested alias.
+
 ### DOCS-019 — Добавить optional per-run caps и budget guardrails
 - Priority: `P2`
 - Depends on: `DOCS-013`

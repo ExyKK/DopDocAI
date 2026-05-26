@@ -130,9 +130,28 @@ class DocumentationWorker:
                     )
                     heartbeat.ensure_alive()
 
+                def report_template_selection(effective_template_kind: str) -> None:
+                    self._store.update_effective_template_kind(
+                        run.id,
+                        self._settings.worker_id,
+                        effective_template_kind,
+                    )
+                    logger.info(
+                        (
+                            "Documentation run template selected documentation_run_id=%s "
+                            "attempt=%s requested_template_kind=%s effective_template_kind=%s"
+                        ),
+                        run.id,
+                        run.attempt,
+                        run.template_kind,
+                        effective_template_kind,
+                    )
+                    heartbeat.ensure_alive()
+
                 plan = self._planning_pipeline.build_developer_handbook(
                     run,
                     report_progress=report_progress,
+                    report_template_selection=report_template_selection,
                 )
                 heartbeat.ensure_alive()
 

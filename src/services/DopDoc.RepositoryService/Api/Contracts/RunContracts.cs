@@ -52,6 +52,8 @@ public sealed record DocumentationRunResponse(
     [property: JsonPropertyName("source_index_run_id")] Guid? SourceIndexRunId,
     [property: JsonPropertyName("base_snapshot_id")] Guid? BaseSnapshotId,
     [property: JsonPropertyName("template_kind")] string TemplateKind,
+    [property: JsonPropertyName("requested_template_kind")] string RequestedTemplateKind,
+    [property: JsonPropertyName("effective_template_kind")] string? EffectiveTemplateKind,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("stage")] string Stage,
     [property: JsonPropertyName("progress_pct")] int ProgressPct,

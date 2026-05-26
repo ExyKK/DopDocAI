@@ -31,6 +31,7 @@ def test_worker_plans_sections_and_transitions_claimed_run_to_success() -> None:
         ("finalizing", 95),
     ]
     assert pipeline.planned_run_id == "run-1"
+    assert store.effective_template_kind == "developer_handbook"
     assert store.succeeded_summary is not None
     assert store.succeeded_summary["scaffold_only"] is False
     assert store.succeeded_summary["sections_total"] == 1
@@ -67,8 +68,16 @@ class FakePlanningPipeline:
     def __init__(self):
         self.planned_run_id = None
 
-    def build_developer_handbook(self, run: ClaimedDocumentationRun, *, report_progress):
+    def build_developer_handbook(
+        self,
+        run: ClaimedDocumentationRun,
+        *,
+        report_progress,
+        report_template_selection=None,
+    ):
         self.planned_run_id = run.id
+        if report_template_selection is not None:
+            report_template_selection("developer_handbook")
         report_progress("loading_project_model", 20)
         report_progress("planning_sections", 35)
         report_progress("retrieving_evidence", 65)
@@ -81,7 +90,13 @@ class FailingPlanningPipeline:
     def __init__(self, error: Exception):
         self._error = error
 
-    def build_developer_handbook(self, run: ClaimedDocumentationRun, *, report_progress):
+    def build_developer_handbook(
+        self,
+        run: ClaimedDocumentationRun,
+        *,
+        report_progress,
+        report_template_selection=None,
+    ):
         raise self._error
 
 
@@ -98,6 +113,7 @@ class FakeStore:
         self._claimed = False
         self._max_attempts = max_attempts
         self.progress_updates: list[tuple[str, int]] = []
+        self.effective_template_kind = None
         self.succeeded_summary = None
         self.failed_call = None
 
@@ -133,6 +149,14 @@ class FakeStore:
 
     def mark_succeeded(self, run_id: str, worker_id: str, *, verification_summary=None) -> None:
         self.succeeded_summary = verification_summary
+
+    def update_effective_template_kind(
+        self,
+        run_id: str,
+        worker_id: str,
+        effective_template_kind: str,
+    ) -> None:
+        self.effective_template_kind = effective_template_kind
 
     def mark_failed(
         self,

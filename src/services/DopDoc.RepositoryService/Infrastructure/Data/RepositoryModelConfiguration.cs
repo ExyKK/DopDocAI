@@ -131,6 +131,7 @@ internal static class RepositoryModelConfiguration
             builder.HasKey(x => x.Id);
             builder.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
             builder.Property(x => x.TemplateKind).HasMaxLength(128).IsRequired();
+            builder.Property(x => x.EffectiveTemplateKind).HasMaxLength(128);
             builder.Property(x => x.Status).HasMaxLength(64).IsRequired();
             builder.Property(x => x.Stage).HasMaxLength(64).IsRequired();
             builder.Property(x => x.WorkerId).HasMaxLength(256);

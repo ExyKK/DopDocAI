@@ -168,6 +168,32 @@ class DocumentationRunStore:
             if row.rowcount != 1:
                 raise LeaseLostError(f"Lease lost for documentation_run {run_id}.")
 
+    def update_effective_template_kind(
+        self,
+        run_id: str,
+        worker_id: str,
+        effective_template_kind: str,
+    ) -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                sql.SQL(
+                    """
+                    UPDATE {schema}.documentation_runs
+                    SET
+                        "EffectiveTemplateKind" = %s,
+                        "UpdatedAt" = now()
+                    WHERE "Id" = %s
+                    AND "Status" = 'running'
+                    AND "WorkerId" = %s
+                    AND "LeaseUntil" > now();
+                    """
+                ).format(schema=sql.Identifier(self._schema)),
+                (effective_template_kind, run_id, worker_id),
+            )
+
+            if row.rowcount != 1:
+                raise LeaseLostError(f"Lease lost for documentation_run {run_id}.")
+
     def mark_succeeded(
         self,
         run_id: str,

@@ -9,6 +9,7 @@ public sealed class DocumentationRun
     public Guid? BaseSnapshotId { get; set; }
     public Guid RequestedByUserId { get; set; }
     public string TemplateKind { get; set; } = "";
+    public string? EffectiveTemplateKind { get; set; }
     public string Status { get; set; } = "";
     public string Stage { get; set; } = "";
     public int ProgressPct { get; set; }
