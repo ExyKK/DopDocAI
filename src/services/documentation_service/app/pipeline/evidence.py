@@ -239,31 +239,41 @@ def _add_structured_evidence(builder: _SectionBuilder, artifacts: dict[str, Any]
             builder,
             project_model,
             ["summary", "repository_layout", "workspace_units", "http_surface", "external_integrations"],
+            limit=80,
         )
-        _from_package_graph(builder, package_graph, ["modules", "packages"])
+        _from_package_graph(builder, package_graph, ["modules", "packages"], limit=80)
     elif key == "local_development":
-        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"])
-        _from_config_inventory(builder, config_inventory, ["config_files", "dependency_locks", "env_vars"])
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"], limit=80)
+        _from_config_inventory(builder, config_inventory, ["config_files", "dependency_locks", "env_vars"], limit=80)
         _add_manifest_sources(builder, project_model, config_inventory)
     elif key == "request_flows":
-        _from_project_model(builder, project_model, ["http_surface", "external_integrations", "workspace_units"])
-        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"])
+        _from_project_model(builder, project_model, ["http_surface", "external_integrations", "workspace_units"], limit=120)
+        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"], limit=120)
     elif key == "data_model":
-        _from_config_inventory(builder, config_inventory, ["data_contracts", "config_files"])
-        _from_project_model(builder, project_model, ["code_outline", "go"])
+        _from_config_inventory(builder, config_inventory, ["data_contracts", "config_files"], limit=120)
+        _from_project_model(builder, project_model, ["code_outline", "go"], limit=80)
     elif key == "api_surface":
-        _from_project_model(builder, project_model, ["http_surface", "workspace_units"])
-        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"])
+        api_inventory = _build_api_surface_inventory(project_model, config_inventory)
+        if api_inventory:
+            builder.evidence["api_surface_inventory"] = api_inventory
+        _from_project_model(builder, project_model, ["http_surface", "workspace_units"], limit=200)
+        _from_config_inventory(builder, config_inventory, ["api_specs", "data_contracts"], limit=200)
     elif key == "frontend":
-        _from_project_model(builder, project_model, ["repository_layout", "workspace_units"])
-        _from_config_inventory(builder, config_inventory, ["dependency_locks", "config_files"])
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units"], limit=80)
+        _from_config_inventory(builder, config_inventory, ["dependency_locks", "config_files"], limit=80)
     elif key == "deployment":
-        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"])
-        _from_config_inventory(builder, config_inventory, ["config_files", "env_vars", "dependency_locks"])
+        _from_project_model(builder, project_model, ["repository_layout", "workspace_units", "configuration"], limit=80)
+        _from_config_inventory(builder, config_inventory, ["config_files", "env_vars", "dependency_locks"], limit=120)
         _add_manifest_sources(builder, project_model, config_inventory)
 
 
-def _from_project_model(builder: _SectionBuilder, project_model: dict[str, Any], keys: list[str]) -> None:
+def _from_project_model(
+    builder: _SectionBuilder,
+    project_model: dict[str, Any],
+    keys: list[str],
+    *,
+    limit: int = 12,
+) -> None:
     if not project_model:
         return
 
@@ -271,10 +281,16 @@ def _from_project_model(builder: _SectionBuilder, project_model: dict[str, Any],
     for key in keys:
         value = project_model.get(key)
         if value is not None:
-            builder.evidence[key] = _compact(value)
+            builder.evidence[key] = _compact(value, limit=limit)
 
 
-def _from_package_graph(builder: _SectionBuilder, package_graph: dict[str, Any], keys: list[str]) -> None:
+def _from_package_graph(
+    builder: _SectionBuilder,
+    package_graph: dict[str, Any],
+    keys: list[str],
+    *,
+    limit: int = 12,
+) -> None:
     if not package_graph:
         return
 
@@ -282,10 +298,16 @@ def _from_package_graph(builder: _SectionBuilder, package_graph: dict[str, Any],
     for key in keys:
         value = package_graph.get(key)
         if value is not None:
-            builder.evidence[key] = _compact(value)
+            builder.evidence[key] = _compact(value, limit=limit)
 
 
-def _from_config_inventory(builder: _SectionBuilder, config_inventory: dict[str, Any], keys: list[str]) -> None:
+def _from_config_inventory(
+    builder: _SectionBuilder,
+    config_inventory: dict[str, Any],
+    keys: list[str],
+    *,
+    limit: int = 12,
+) -> None:
     if not config_inventory:
         return
 
@@ -293,7 +315,7 @@ def _from_config_inventory(builder: _SectionBuilder, config_inventory: dict[str,
     for key in keys:
         value = config_inventory.get(key)
         if value is not None:
-            builder.evidence[key] = _compact(value)
+            builder.evidence[key] = _compact(value, limit=limit)
 
 
 def _from_commit_log(
@@ -541,6 +563,153 @@ def _build_merge_commit_summary(
     return result
 
 
+def _build_api_surface_inventory(
+    project_model: dict[str, Any],
+    config_inventory: dict[str, Any],
+) -> dict[str, Any]:
+    http_surface = project_model.get("http_surface")
+    if not isinstance(http_surface, dict):
+        http_surface = {}
+
+    routes = [
+        _compact_route(route)
+        for route in _as_list(http_surface.get("routes"))
+    ]
+    api_specs = [
+        _compact_api_spec(spec)
+        for spec in _as_list(config_inventory.get("api_specs"))
+    ]
+    contracts = [
+        _compact_data_contract(contract)
+        for contract in _as_list(config_inventory.get("data_contracts"))
+    ]
+    if not routes and not api_specs and not contracts:
+        return {}
+
+    route_services = sorted(
+        {
+            service
+            for service in (_service_from_workspace_id(route.get("workspace_unit_id")) for route in routes)
+            if service
+        }
+    )
+    spec_services = sorted(
+        {
+            service
+            for service in (_service_from_path(spec.get("path")) for spec in api_specs)
+            if service
+        }
+    )
+    return {
+        "summary": {
+            "routes_total": len(routes),
+            "route_services_total": len(route_services),
+            "route_services": route_services,
+            "api_specs_total": len(api_specs),
+            "api_spec_services_total": len(spec_services),
+            "api_spec_services": spec_services,
+            "data_contracts_total": len(contracts),
+            "note": (
+                "Use route_services/api_spec_services as coverage guardrails. "
+                "If route details are incomplete for a service that has API specs, state that explicitly."
+            ),
+        },
+        "routes": routes,
+        "api_specs": api_specs,
+        "data_contracts": contracts,
+    }
+
+
+def _compact_route(route: dict[str, Any]) -> dict[str, Any]:
+    handler = route.get("handler") if isinstance(route.get("handler"), dict) else {}
+    handler_symbol = handler.get("symbol") if isinstance(handler.get("symbol"), dict) else {}
+    return {
+        "method": _optional_str(route.get("method")),
+        "path": _optional_str(route.get("path")),
+        "framework": _optional_str(route.get("framework")),
+        "handler": _optional_str(handler.get("expression"))
+        or _optional_str(handler_symbol.get("qualified_name")),
+        "file_path": _optional_str(route.get("file_path")),
+        "line": route.get("line"),
+        "workspace_unit_id": _optional_str(route.get("workspace_unit_id")),
+        "service": _service_from_workspace_id(_optional_str(route.get("workspace_unit_id"))),
+        "source_scope": _optional_str(route.get("source_scope")),
+    }
+
+
+def _compact_api_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    path = _path_from(spec)
+    payload = {
+        "path": path,
+        "service": _service_from_path(path),
+        "format": _optional_str(spec.get("format")),
+        "spec_kind": _optional_str(spec.get("spec_kind")),
+        "spec_version": _optional_str(spec.get("spec_version")),
+        "title": _optional_str(spec.get("title")),
+        "version": _optional_str(spec.get("version")),
+        "paths_total": spec.get("paths_total"),
+        "operations_total": spec.get("operations_total"),
+        "operations_truncated": bool(spec.get("operations_truncated")),
+        "source_scope": _optional_str(spec.get("source_scope")),
+        "runtime_scope": spec.get("runtime_scope"),
+        "truncated": bool(spec.get("truncated")),
+    }
+    operations = _as_list(spec.get("operations"))
+    if operations:
+        payload["operations"] = [
+            {
+                "method": _optional_str(operation.get("method")),
+                "path": _optional_str(operation.get("path")),
+                "operation_id": _optional_str(operation.get("operation_id")),
+                "summary": _optional_str(operation.get("summary")),
+                "tags": operation.get("tags") or [],
+            }
+            for operation in operations[:120]
+            if isinstance(operation, dict)
+        ]
+    return payload
+
+
+def _compact_data_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    source = contract.get("source") if isinstance(contract.get("source"), dict) else {}
+    fields = []
+    for field in _as_list(contract.get("fields"))[:16]:
+        fields.append(
+            {
+                "name": _optional_str(field.get("name")),
+                "type": _optional_str(field.get("type")),
+                "tags": field.get("tags") or {},
+            }
+        )
+    return {
+        "name": _optional_str(contract.get("name")),
+        "model_kind": _optional_str(contract.get("model_kind")),
+        "file_path": _optional_str(source.get("file_path")),
+        "service": _service_from_path(_optional_str(source.get("file_path"))),
+        "fields": fields,
+    }
+
+
+def _service_from_workspace_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.split(":")[-1]
+    if text.startswith("backend-"):
+        return text.removeprefix("backend-")
+    return text or None
+
+
+def _service_from_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    parts = _normalize_path(path).split("/")
+    if len(parts) >= 2 and parts[0] == "backend":
+        return parts[1]
+    if parts:
+        return parts[0]
+    return None
+
+
 def _filter_retrieval_matches(
     section_key: str,
     matches: list[RetrievedSource],
@@ -553,7 +722,7 @@ def _filter_retrieval_matches(
 
 
 def _allow_retrieval_match(section_key: str, match: RetrievedSource) -> bool:
-    if section_key in {"api_reference"}:
+    if section_key in {"api_reference", "api_surface"}:
         return True
     if match.source_scope == "generated":
         return False

@@ -103,7 +103,7 @@ class DocumentationGenerationPipeline:
             json_mode_enabled=llm_json_mode_enabled,
         )
         self._prompt_output_language = prompt_output_language
-        self._max_repair_rounds = max(0, max_repair_rounds)
+        self._max_repair_rounds = min(max(0, max_repair_rounds), 1)
         self._pipeline_trace_enabled = pipeline_trace_enabled
         self._usage_pricing = usage_pricing
         self._trace: PipelineTrace | None = None
@@ -357,6 +357,7 @@ class DocumentationGenerationPipeline:
                     repair_round=repair_round,
                     previous_report=verification_reports[-1] if verification_reports else None,
                     judge_section_keys=repaired_section_keys_for_next_verification,
+                    force_deterministic=repair_round > 0,
                 )
             except Exception:
                 self._set_failure_context(
@@ -377,6 +378,8 @@ class DocumentationGenerationPipeline:
             if not report.has_hard_errors():
                 break
             if repair_round >= self._max_repair_rounds:
+                break
+            if repair_round > 0:
                 break
 
             plan = build_repair_plan(report)
@@ -527,6 +530,46 @@ class DocumentationGenerationPipeline:
                 template_kind=effective_template_kind,
                 publication_state="draft",
             )
+
+        if (
+            verification_reports
+            and verification_reports[-1].has_hard_errors()
+            and verification_reports[-1].effective_mode != "deterministic"
+        ):
+            report_progress(
+                "verifying_documentation",
+                86,
+                progress_current=self._max_repair_rounds + 1,
+                progress_total=self._max_repair_rounds + 1,
+            )
+            current_manifest = self._build_manifest(
+                run=run,
+                template_kind=effective_template_kind,
+                template_selection=template_selection.to_dict(),
+                repository_classification=repository_classification.to_dict(),
+                generated_sections=generated_sections,
+                section_artifacts_by_key=section_artifacts_by_key,
+                bundle=bundle,
+                evidence_pack_artifact=evidence_pack_artifact,
+                prompt_contract_artifact=prompt_contract_artifact,
+                rendered_evidence_pack_artifact=rendered_evidence_pack_artifact,
+            )
+            final_check = self._verifier.verify(
+                documentation_run_id=run.id,
+                repository_id=run.repository_id,
+                snapshot_id=run.snapshot_id,
+                template_kind=effective_template_kind,
+                requested_template_kind=run.template_kind,
+                sections=generated_sections,
+                documents=bundle.documents,
+                manifest=current_manifest,
+                contracts=prompt_contracts,
+                repair_round=verification_reports[-1].repair_round + 1,
+                previous_report=verification_reports[-1],
+                force_deterministic=True,
+            )
+            verification_reports.append(final_check)
+            self._record_verification_completed(final_check)
 
         final_report = verification_reports[-1]
         verification_report_artifact = self._publish_json(

@@ -66,7 +66,9 @@ _API_SPEC_FILENAMES = {
     "swagger.yml",
 }
 _API_SPEC_PATH_PARTS = {"api-docs", "apidocs", "openapi", "swagger"}
-_HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+_HTTP_METHOD_ORDER = ("get", "post", "put", "patch", "delete", "options", "head", "trace")
+_HTTP_METHODS = set(_HTTP_METHOD_ORDER)
+_MAX_API_SPEC_OPERATIONS = 120
 
 
 def build_config_inventory_artifact(
@@ -1086,12 +1088,7 @@ def _summarize_api_spec_mapping(value: dict[str, Any]) -> dict[str, Any]:
     spec_kind = "openapi" if "openapi" in value else "swagger" if "swagger" in value else "unknown"
     info = value.get("info") if isinstance(value.get("info"), dict) else {}
     paths = value.get("paths") if isinstance(value.get("paths"), dict) else {}
-    operations_total = 0
-    for path_item in paths.values():
-        if not isinstance(path_item, dict):
-            continue
-
-        operations_total += sum(1 for method in path_item if str(method).lower() in _HTTP_METHODS)
+    operations_total, operations = _extract_mapping_api_operations(paths)
 
     return {
         "spec_kind": spec_kind,
@@ -1100,6 +1097,8 @@ def _summarize_api_spec_mapping(value: dict[str, Any]) -> dict[str, Any]:
         "version": info.get("version"),
         "paths_total": len(paths),
         "operations_total": operations_total,
+        "operations": operations,
+        "operations_truncated": operations_total > len(operations),
     }
 
 
@@ -1110,7 +1109,7 @@ def _summarize_api_spec_text(text: str) -> dict[str, Any]:
     )
     title = _yaml_info_scalar(text, "title")
     app_version = _yaml_info_scalar(text, "version")
-    paths_total, operations_total = _count_yaml_api_paths(text)
+    paths_total, operations_total, operations = _extract_yaml_api_operations(text)
 
     spec_kind = version_match.group(1).lower() if version_match else "unknown"
     return {
@@ -1120,6 +1119,8 @@ def _summarize_api_spec_text(text: str) -> dict[str, Any]:
         "version": app_version,
         "paths_total": paths_total,
         "operations_total": operations_total,
+        "operations": operations,
+        "operations_truncated": operations_total > len(operations),
     }
 
 
@@ -1146,11 +1147,53 @@ def _yaml_info_scalar(text: str, key: str) -> str | None:
     return None
 
 
-def _count_yaml_api_paths(text: str) -> tuple[int, int]:
+def _extract_mapping_api_operations(paths: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
+    operations_total = 0
+    operations: list[dict[str, Any]] = []
+    method_rank = {method: index for index, method in enumerate(_HTTP_METHOD_ORDER)}
+    for raw_path, path_item in sorted(paths.items(), key=lambda item: str(item[0])):
+        api_path = str(raw_path)
+        if not isinstance(path_item, dict):
+            continue
+
+        methods = sorted(
+            (str(method).lower(), operation)
+            for method, operation in path_item.items()
+            if str(method).lower() in _HTTP_METHODS
+        )
+        methods.sort(key=lambda item: method_rank.get(item[0], len(method_rank)))
+        for method, operation in methods:
+            operations_total += 1
+            if len(operations) >= _MAX_API_SPEC_OPERATIONS:
+                continue
+
+            operation_payload = operation if isinstance(operation, dict) else {}
+            item: dict[str, Any] = {
+                "method": method.upper(),
+                "path": api_path,
+            }
+            _add_optional_api_operation_field(item, "operation_id", operation_payload.get("operationId"))
+            _add_optional_api_operation_field(item, "summary", operation_payload.get("summary"))
+            _add_optional_api_operation_field(item, "description", operation_payload.get("description"))
+            tags = operation_payload.get("tags")
+            if isinstance(tags, list):
+                compact_tags = [str(tag) for tag in tags[:8] if tag is not None]
+                if compact_tags:
+                    item["tags"] = compact_tags
+            operations.append(item)
+
+    return operations_total, operations
+
+
+def _extract_yaml_api_operations(text: str) -> tuple[int, int, list[dict[str, Any]]]:
     paths_indent: int | None = None
     current_path_indent: int | None = None
+    current_operation_indent: int | None = None
+    current_path: str | None = None
+    current_operation: dict[str, Any] | None = None
     paths_total = 0
     operations_total = 0
+    operations: list[dict[str, Any]] = []
 
     for raw_line in text.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
@@ -1166,20 +1209,56 @@ def _count_yaml_api_paths(text: str) -> tuple[int, int]:
         if indent <= paths_indent:
             break
 
-        key_match = re.match(r"^['\"]?([^:'\"]+)['\"]?\s*:\s*(?:#.*)?$", stripped)
+        key_match = re.match(r"^['\"]?([^:'\"]+)['\"]?\s*:\s*(?:.*)?$", stripped)
         if key_match is None:
             continue
 
         key = key_match.group(1)
         if key.startswith("/") and (current_path_indent is None or indent <= current_path_indent):
             current_path_indent = indent
+            current_operation_indent = None
+            current_path = key
+            current_operation = None
             paths_total += 1
             continue
 
         if current_path_indent is not None and indent > current_path_indent and key.lower() in _HTTP_METHODS:
             operations_total += 1
+            current_operation_indent = indent
+            current_operation = None
+            if current_path is not None and len(operations) < _MAX_API_SPEC_OPERATIONS:
+                current_operation = {
+                    "method": key.upper(),
+                    "path": current_path,
+                }
+                operations.append(current_operation)
+            continue
 
-    return paths_total, operations_total
+        if (
+            current_operation is not None
+            and current_operation_indent is not None
+            and indent > current_operation_indent
+            and key in {"operationId", "summary", "description"}
+        ):
+            value = _yaml_inline_scalar(stripped)
+            if value:
+                target_key = "operation_id" if key == "operationId" else key
+                current_operation[target_key] = value
+
+    return paths_total, operations_total, operations
+
+
+def _yaml_inline_scalar(stripped_line: str) -> str | None:
+    match = re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*['\"]?([^'\"\n#]+)", stripped_line)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _add_optional_api_operation_field(target: dict[str, Any], key: str, value: Any) -> None:
+    if isinstance(value, str) and value.strip():
+        target[key] = value.strip()
 
 
 def _is_api_spec_mapping(value: Any) -> bool:

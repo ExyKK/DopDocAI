@@ -139,6 +139,8 @@ def _developer_instructions(output_language: str, *, template_kind: str) -> str:
         "Every factual claim about repository behavior, files, commands, APIs, dependencies, or configuration must cite one or more source ids in square brackets, for example [S1] or [S2][S4].",
         "Use only source ids listed in the evidence pack.",
         "If evidence is weak or missing, say so explicitly and keep the section partial.",
+        "If a structured summary reports more services, routes, specs, files or contracts than the detailed evidence shows, mention the coverage limitation instead of presenting the visible subset as complete.",
+        "For API sections, compare route/spec service counts before writing endpoint lists; do not document only the first services if API specs indicate more services exist.",
         "Prefer precise repository terms from the evidence over generic wording.",
         "Use commit evidence only as recent history. A historical `deleted` event does not mean the file is absent now unless `current_file_state` is `absent`.",
         "Do not include raw JSON dumps or repeat evidence tables wholesale.",

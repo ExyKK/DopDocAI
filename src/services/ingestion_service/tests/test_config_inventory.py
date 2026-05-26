@@ -250,7 +250,12 @@ APP_TOKEN=example-token
         {
             "format": "json",
             "line_count": 11,
+            "operations": [
+                {"method": "GET", "path": "/posts"},
+                {"method": "POST", "path": "/posts"},
+            ],
             "operations_total": 2,
+            "operations_truncated": False,
             "parse_error": False,
             "path": "docs/swagger/swagger.json",
             "paths_total": 1,

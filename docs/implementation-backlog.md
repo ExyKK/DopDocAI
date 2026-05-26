@@ -1499,6 +1499,123 @@
 - `pipeline_trace.summary` теперь агрегирует LLM tokens/latency по `usage_stage`, а trace events содержат `usage_stage`, `verification_phase`, `repair_round`, `estimated_input_tokens` и `cost_usd`;
 - rough cost берётся из provider response `usage.cost`/`cost_usd`, если он есть, иначе считается как upper-bound estimate по существующим `DOPDOC_LLM_PROVIDER_MAX_PRICE_*` knobs; при отсутствии pricing явно остаётся `unknown`.
 
+### DOCS-029 — MVP: расширить evidence для полезных первичных docs
+- Priority: `P0`
+- Depends on: `DOCS-017`, `DOCS-023`, `DOCS-028`
+- Status: `completed`
+- Goal: улучшить качество первичной генерации без нового research/refactoring pass: если контекст модели позволяет, передавать больше структурированных и raw evidence сразу, чтобы LLM не восстанавливала важные детали по неполной выжимке.
+- Tasks:
+- увеличить практические token budgets для production-like documentation generation под DeepSeek V4 Flash 1M context;
+- для `api_surface`/`api_reference` передавать полный нормализованный список runtime routes и OpenAPI operations по всем сервисам, а не только обрезанный aggregate preview;
+- для monorepo sections (`service_map`, `request_flows`, `local_development`, `deployment`, `configuration`, `frontend`) добавлять целевые raw/config sources: `docker-compose.yml`, stack files, gateway routing files, frontend package scripts/routes and service entrypoints;
+- в prompt instructions явно требовать: если structured summary говорит о большем числе сервисов/routes/specs, но details не переданы, писать limitation вместо неполного списка;
+- ослабить прежнее стремление к малому context size: лучше один дорогой, но содержательный generation pass, чем repair после неполного evidence.
+- Acceptance:
+- Image-board `api_surface` перечисляет все обнаруженные backend services/API specs или явно объясняет, какие routes доступны только как specs/generated docs;
+- `api_reference.md` не выглядит как документация только по `auth-service` и `boards-service`, если artifact inventory видит `users`, `threads`, `media` and gateway;
+- local/deployment/configuration sections опираются на реальные compose/stack/package files, а не на догадки;
+- `usage_accounting` показывает рост generation context, но снижение необходимости repair.
+- Notes:
+- production-like defaults увеличены под DeepSeek V4 Flash 1M context: docs max output `8192`, evidence pack `250000` tokens, source cap `32000`, sources cap `120`;
+- monorepo sections теперь используют увеличенные structured evidence limits, а `api_surface` получает `api_surface_inventory` с full routes/specs/contracts summary;
+- `config_inventory.api_specs` теперь сохраняет bounded normalized OpenAPI/Swagger operations list, а rendered evidence для `api_surface_inventory` показывает routes/specs/operations/contracts отдельными таблицами;
+- retrieval для `api_surface` допускает generated Swagger/OpenAPI chunks, чтобы API docs не ограничивались только runtime route extraction;
+- prompt contract явно предупреждает: если summary показывает больше services/routes/specs, чем детальные sources, нужно писать limitation, а не выдавать неполный subset за полный список.
+
+### DOCS-030 — MVP: упростить verification/repair policy
+- Priority: `P0`
+- Depends on: `DOCS-008`, `DOCS-008B`, `DOCS-025`, `DOCS-026`, `DOCS-028`
+- Status: `completed`
+- Goal: перестать тратить основной MVP-бюджет на дорогую пост-ремонтную LLM verification, которая сейчас часто не улучшает пользовательский результат.
+- Tasks:
+- оставить максимум один LLM-assisted repair round;
+- после repair не запускать full LLM section/document-set judge повторно;
+- выполнить deterministic final verification: пустые секции, broken citations/source ids, duplicate `Sources`, незакрытые code fences/brackets, явные повторы блоков, слишком короткие/битые документы, technical artifact consistency;
+- LLM judge initial findings использовать как подсказку для одного repair, но после repair не fail-ить run из-за remaining warnings/weak evidence;
+- publish final artifacts after repair если deterministic final check не нашёл hard technical errors; unresolved judge warnings сохранить в manifest/verification summary as quality warnings.
+- Acceptance:
+- успешный documentation run не падает после 20-30 минут из-за спорных/субъективных judge warnings;
+- `usage_accounting` больше не содержит дорогой `verification_post_repair` stage для MVP режима;
+- repair не запускается второй раз и не перетирает полезные изменения;
+- failed status остаётся только для technical failures или грубых deterministic hygiene errors.
+- Notes:
+- `max_repair_rounds` теперь фактически capped at `1`, а config/compose/env defaults выставлены в `1`;
+- initial verification остаётся `hybrid` и может дать LLM findings для repair;
+- post-repair verification вызывается в forced deterministic mode, без повторного section/document-set LLM judge;
+- если initial LLM judge дал hard findings, но repair не нужен/невозможен, перед fail/publish всё равно выполняется deterministic final check, чтобы MVP не падал из-за subjective judge errors;
+- deterministic hygiene checks усилены duplicate `Sources`, unclosed fences, грубо несбалансированными delimiters and substantial repeated cross-document blocks.
+
+### DOCS-031 — MVP: убрать повторы и сделать reader-facing docs пригодными
+- Priority: `P0`
+- Depends on: `DOCS-017`, `DOCS-029`, `DOCS-030`
+- Status: `completed`
+- Goal: финальные Markdown artifacts должны выглядеть как набор полезных документов, а не как повторение одних и тех же секций в разных файлах.
+- Tasks:
+- пересмотреть intent-based assembly для MVP: одна canonical section должна попадать в один основной reader-facing document, остальные documents должны ссылаться на неё или давать короткий summary;
+- сделать `documentation.md` полноценным index/landing документом с кратким executive summary, status/quality warnings and links to reader-facing artifacts;
+- для `repository_brief`, `onboarding_guide`, `architecture_map`, `api_reference`, `configuration_reference`, `commands_reference`, `package_service_index`, `change_report` оставить только релевантные секции без verbatim duplication;
+- добавить lightweight deterministic post-processing для удаления повторного `### Sources`, повторяющихся заголовков и одинаковых соседних блоков;
+- явно отображать unresolved limitations/warnings в конце документа, а не смешивать их с основным описанием.
+- Acceptance:
+- verification/document-set больше не находит verbatim duplicated sections across artifacts as основной дефект;
+- `api_reference.md` не повторяет большие architecture/request-flow blocks дословно;
+- пользователь может открыть `documentation.md` и понять, какие документы читать дальше;
+- итоговая документация пригодна для демонстрации без ручной чистки Markdown.
+- Notes:
+- generator теперь embeds each generated section only once; later documents get lightweight `Related Sections` links to the canonical document instead of verbatim section duplication;
+- document templates reordered so API/config/commands docs own their most relevant sections first;
+- model-provided `Sources`/`References` appendices are stripped before adding the pipeline-owned source appendix, preventing duplicated source blocks.
+
+## Epic MVP — Final Demo Slice
+
+### MVP-001 — Подключить публичный demo flow через Gateway
+- Priority: `P0`
+- Depends on: `GATEWAY-001`, `GATEWAY-002`, `REPO-005`, `CHAT-003`, `DOCS-030`
+- Status: `planned`
+- Goal: frontend должен иметь единый публичный путь к основным сценариям без прямого знания internal service URLs.
+- Tasks:
+- пробросить через EdgeGateway необходимые routes для repositories, index runs, documentation runs, documentation artifacts and chat;
+- обеспечить передачу auth/user context (`X-User-Id`) через gateway для новых C# сервисов;
+- для MVP оставить только реально используемые endpoints, без полного API polish;
+- проверить вручную сценарии `create/list repository`, `index`, `generate documentation`, `open artifacts`, `chat with sources`.
+- Acceptance:
+- frontend может работать через один base URL;
+- основные сценарии не требуют ручной подстановки `X-User-Id` из клиента;
+- legacy repos/chats endpoints не нужны для demo flow.
+
+### MVP-002 — Реализовать frontend MVP для repository workspace
+- Priority: `P0`
+- Depends on: `MVP-001`, `DOCS-031`
+- Status: `planned`
+- Goal: получить жизнеспособный UI для дипломной демонстрации: индексировать репозиторий, генерировать документацию, читать artifacts и задавать вопросы по snapshot.
+- Tasks:
+- сделать основной экран repository workspace: add GitHub URL, repository list/status, active snapshot/index run status;
+- добавить запуск documentation run и отображение progress/status/errors;
+- добавить Markdown viewer для `documentation.md` и intent-based artifacts с простым navigation/sidebar;
+- добавить chat panel по активному repository/snapshot with streaming or near-real-time response and visible sources;
+- показывать verification/quality status компактно: passed, passed with warnings, failed technical, плюс ссылка/summary на limitations;
+- не тратить время на дизайн-системный идеал: важны понятные состояния, удобное чтение и закрытый end-to-end flow.
+- Acceptance:
+- пользователь из UI проходит `repository URL -> index -> generate docs -> read docs -> ask chat question`;
+- результаты documentation run доступны без похода в MinIO/Postgres;
+- чат показывает ответ и источники по текущему snapshot;
+- UI достаточно стабилен для ручного тестирования корпуса репозиториев.
+
+### MVP-003 — Финальный ручной прогон и corpus checklist
+- Priority: `P0`
+- Depends on: `DOCS-031`, `MVP-002`
+- Status: `planned`
+- Goal: зафиксировать минимально воспроизводимый экспериментальный workflow для последней главы диплома.
+- Tasks:
+- составить короткий checklist ручного прогона: index time, docs generation time, token/cost usage, verification status, subjective usefulness notes, known failures;
+- прогнать 3-5 небольших репозиториев разных типов: Go library/CLI, monorepo web app, small backend/API, frontend app if available;
+- сохранить generated docs, usage summaries and notes в `docs/artifacts_example`/thesis working notes;
+- по результатам не начинать новые архитектурные эпики, только точечные fixes blockers.
+- Acceptance:
+- есть corpus results для анализа эффективности;
+- известны текущие ограничения MVP и они честно описаны;
+- дипломный demo flow можно повторить с нуля.
+
 ## Epic GATEWAY — Public API Integration
 
 ### GATEWAY-001 — Подключить новые маршруты в EdgeGateway

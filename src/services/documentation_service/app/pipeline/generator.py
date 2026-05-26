@@ -22,6 +22,8 @@ class GeneratedDocument:
     artifact_kind: str
     section_keys: tuple[str, ...]
     content_markdown: str
+    embedded_section_keys: tuple[str, ...] = ()
+    referenced_section_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class DeveloperHandbookGenerator:
     ) -> list[GeneratedDocument]:
         section_by_key = {section.section_key: section for section in sections}
         documents: list[GeneratedDocument] = []
+        canonical_document_by_section: dict[str, _DocumentTemplate] = {}
         for template in _document_templates(template_kind):
             selected_sections = [
                 section_by_key[key]
@@ -59,11 +62,27 @@ class DeveloperHandbookGenerator:
             ]
             if not selected_sections:
                 continue
+            embedded_sections = [
+                section
+                for section in selected_sections
+                if section.section_key not in canonical_document_by_section
+            ]
+            referenced_sections = [
+                section
+                for section in selected_sections
+                if section.section_key in canonical_document_by_section
+            ]
+            for section in embedded_sections:
+                canonical_document_by_section[section.section_key] = template
 
             content = _assemble_document_body(
                 title=template.title,
                 description=template.description,
-                sections=selected_sections,
+                sections=embedded_sections,
+                references=[
+                    _section_reference(section, canonical_document_by_section[section.section_key])
+                    for section in referenced_sections
+                ],
             )
             documents.append(
                 GeneratedDocument(
@@ -74,6 +93,8 @@ class DeveloperHandbookGenerator:
                     artifact_kind=template.artifact_kind,
                     section_keys=tuple(section.section_key for section in selected_sections),
                     content_markdown=content,
+                    embedded_section_keys=tuple(section.section_key for section in embedded_sections),
+                    referenced_section_keys=tuple(section.section_key for section in referenced_sections),
                 )
             )
         return documents
@@ -156,6 +177,8 @@ class DeveloperHandbookGenerator:
                     "file_name": document.file_name,
                     "artifact_kind": document.artifact_kind,
                     "section_keys": list(document.section_keys),
+                    "embedded_section_keys": list(document.embedded_section_keys),
+                    "referenced_section_keys": list(document.referenced_section_keys),
                     "artifact": document_artifacts[index],
                 }
                 for index, document in enumerate(documents)
@@ -193,6 +216,7 @@ def _assemble_document_body(
     title: str,
     description: str,
     sections: list[GeneratedSection],
+    references: list[dict[str, str]] | None = None,
 ) -> str:
     lines = [
         f"# {title}",
@@ -203,38 +227,56 @@ def _assemble_document_body(
     for section in sections:
         lines.append(section.content_markdown.rstrip())
         lines.append("")
+    if references:
+        lines.append("## Related Sections")
+        lines.append("")
+        for reference in references:
+            lines.append(
+                f"- {reference['title']}: see [{reference['document_title']}]({reference['file_name']})."
+            )
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _section_reference(section: GeneratedSection, document: _DocumentTemplate) -> dict[str, str]:
+    return {
+        "section_key": section.section_key,
+        "title": section.title,
+        "document_key": document.document_key,
+        "document_title": document.title,
+        "file_name": document.file_name,
+    }
 
 
 def _document_templates(template_kind: str) -> tuple[_DocumentTemplate, ...]:
     if template_kind == "go_library_handbook":
         return (
             _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the library.", ("overview",)),
+            _document_template("api_reference", "API Reference", "Public Go API surface grounded in indexed symbols.", ("public_api",)),
+            _document_template("commands_reference", "Commands Reference", "Command lifecycle, flags, completions and docs generation.", ("command_lifecycle", "flags_and_args", "completions", "doc_generation", "build_run_test")),
             _document_template("onboarding_guide", "Onboarding Guide", "Practical build, test and contribution starting points.", ("build_run_test", "testing")),
             _document_template("architecture_map", "Architecture Map", "Package structure and command/runtime design.", ("package_map", "public_api", "command_lifecycle", "analysis_limitations")),
-            _document_template("api_reference", "API Reference", "Public Go API surface grounded in indexed symbols.", ("public_api",)),
             _document_template("configuration_reference", "Configuration Reference", "Flags, arguments and configuration-like inputs.", ("flags_and_args",)),
-            _document_template("commands_reference", "Commands Reference", "Command lifecycle, flags, completions and docs generation.", ("command_lifecycle", "flags_and_args", "completions", "doc_generation", "build_run_test")),
             _document_template("package_service_index", "Package Index", "Important packages and their responsibilities.", ("package_map",)),
             _document_template("change_report", "Change Report", "Recent history kept separate from current architecture.", ("change_report",)),
         )
     if template_kind == "monorepo_web_app_handbook":
         return (
             _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the monorepo.", ("overview",)),
-            _document_template("onboarding_guide", "Onboarding Guide", "Local development and setup guidance for contributors.", ("local_development", "configuration")),
             _document_template("architecture_map", "Architecture Map", "Current frontend/backend structure, flows and deployment shape.", ("service_map", "request_flows", "data_model", "frontend", "deployment", "analysis_limitations")),
             _document_template("api_reference", "API Reference", "HTTP/API surface and request-flow evidence.", ("api_surface", "request_flows")),
             _document_template("configuration_reference", "Configuration Reference", "Environment, config and deployment settings.", ("configuration", "deployment")),
+            _document_template("onboarding_guide", "Onboarding Guide", "Local development and setup guidance for contributors.", ("local_development", "configuration")),
             _document_template("commands_reference", "Commands Reference", "Local scripts, Docker and service commands found in manifests.", ("local_development",)),
             _document_template("package_service_index", "Service Index", "Workspace units, services and frontend areas.", ("service_map", "frontend")),
             _document_template("change_report", "Change Report", "Recent history kept separate from current architecture.", ("change_report",)),
         )
     return (
         _document_template("repository_brief", "Repository Brief", "Short orientation for readers who need a fast understanding of the repository.", ("overview",)),
-        _document_template("onboarding_guide", "Onboarding Guide", "Build, run, test and configuration starting points.", ("build_run_test", "configuration")),
         _document_template("architecture_map", "Architecture Map", "Repository structure, package map, entry points and flows.", ("repository_layout", "package_map", "entry_points", "major_flows", "domain_entities", "integrations", "analysis_limitations")),
         _document_template("api_reference", "API Reference", "Entry points and integration/API evidence.", ("entry_points", "integrations")),
         _document_template("configuration_reference", "Configuration Reference", "Environment variables, config files and dependency settings.", ("configuration",)),
+        _document_template("onboarding_guide", "Onboarding Guide", "Build, run, test and configuration starting points.", ("build_run_test", "configuration")),
         _document_template("commands_reference", "Commands Reference", "Commands and local development actions supported by evidence.", ("build_run_test", "entry_points")),
         _document_template("package_service_index", "Package And Service Index", "Repository layout and package/service responsibilities.", ("repository_layout", "package_map")),
         _document_template("change_report", "Change Report", "Recent history kept separate from current architecture.", ("change_report",)),

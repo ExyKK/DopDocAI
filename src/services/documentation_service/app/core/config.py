@@ -50,7 +50,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DOCS_LLM_TEMPERATURE", "DOPDOC_LLM_TEMPERATURE"),
     )
     llm_max_tokens: int = Field(
-        default=4096,
+        default=8192,
         validation_alias=AliasChoices(
             "DOCS_LLM_MAX_TOKENS",
             "DOPDOC_DOCS_LLM_MAX_TOKENS",
@@ -105,21 +105,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DOCS_PROMPT_OUTPUT_LANGUAGE", "DOPDOC_DOCS_OUTPUT_LANGUAGE"),
     )
     evidence_pack_max_tokens: int = Field(
-        default=120_000,
+        default=250_000,
         validation_alias=AliasChoices(
             "DOCS_EVIDENCE_PACK_MAX_TOKENS",
             "DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS",
         ),
     )
     evidence_pack_max_source_tokens: int = Field(
-        default=16_000,
+        default=32_000,
         validation_alias=AliasChoices(
             "DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS",
             "DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS",
         ),
     )
     evidence_pack_max_sources: int = Field(
-        default=80,
+        default=120,
         validation_alias=AliasChoices(
             "DOCS_EVIDENCE_PACK_MAX_SOURCES",
             "DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES",
@@ -133,7 +133,7 @@ class Settings(BaseSettings):
         ),
     )
     max_repair_rounds: int = Field(
-        default=2,
+        default=1,
         validation_alias=AliasChoices(
             "DOCS_MAX_REPAIR_ROUNDS",
             "DOPDOC_DOCS_MAX_REPAIR_ROUNDS",

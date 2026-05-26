@@ -221,8 +221,9 @@ class DocumentationVerifier:
         repair_round: int = 0,
         previous_report: VerificationReport | None = None,
         judge_section_keys: set[str] | None = None,
+        force_deterministic: bool = False,
     ) -> VerificationReport:
-        effective_mode = self._effective_mode()
+        effective_mode = "deterministic" if force_deterministic else self._effective_mode()
         contract_by_section = {contract.section_key: contract for contract in contracts}
         previous_findings = _previous_llm_findings_by_section(previous_report)
         previous_scores = dict(previous_report.section_scores) if previous_report else {}
@@ -517,6 +518,35 @@ def _section_findings(
             )
         )
 
+    if len(re.findall(r"(?im)^#{2,6}\s*(sources|references|источники|ссылки)\s*$", markdown)) > 1:
+        findings.append(
+            VerificationFinding(
+                check_id="duplicate_sources_appendix",
+                severity="error",
+                category="output_hygiene",
+                section_key=section.section_key,
+                message="Section contains more than one Sources/References appendix.",
+                repairable=True,
+                suggested_fix="Keep only the pipeline-owned Sources appendix.",
+                repair_strategy="rewrite_existing",
+            )
+        )
+
+    unbalanced = _unbalanced_markdown_delimiters(body)
+    if unbalanced:
+        findings.append(
+            VerificationFinding(
+                check_id="unbalanced_markdown_delimiters",
+                severity="error",
+                category="output_hygiene",
+                section_key=section.section_key,
+                message=f"Section appears to contain unbalanced delimiters: {', '.join(unbalanced)}.",
+                repairable=True,
+                suggested_fix="Fix or remove the broken sentence/table/list item.",
+                repair_strategy="rewrite_existing",
+            )
+        )
+
     if _looks_like_raw_json_dump(body):
         findings.append(
             VerificationFinding(
@@ -577,6 +607,7 @@ def _document_findings(documents: list[GeneratedDocument]) -> list[VerificationF
                     repairable=False,
                 )
             )
+    findings.extend(_duplicate_document_block_findings(documents))
     return findings
 
 
@@ -1152,6 +1183,76 @@ def _looks_like_raw_json_dump(markdown: str) -> bool:
     if "```json" in text.lower():
         return True
     return text.count('":') >= 5 and text.count("{") >= 2 and text.count("}") >= 2
+
+
+def _unbalanced_markdown_delimiters(markdown: str) -> list[str]:
+    text = re.sub(r"```.*?```", "", markdown or "", flags=re.DOTALL)
+    pairs = (("(", ")"), ("[", "]"))
+    result: list[str] = []
+    for left, right in pairs:
+        delta = text.count(left) - text.count(right)
+        if abs(delta) >= 2:
+            result.append(f"{left}{right}")
+    return result
+
+
+def _duplicate_document_block_findings(documents: list[GeneratedDocument]) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+    seen: dict[str, str] = {}
+    for document in documents:
+        for block in _markdown_blocks(document.content_markdown):
+            owner = seen.get(block)
+            if owner is None:
+                seen[block] = document.document_key
+                continue
+            if owner == document.document_key:
+                continue
+            findings.append(
+                VerificationFinding(
+                    check_id="duplicate_document_block",
+                    severity="warning",
+                    category="duplication",
+                    document_key=document.document_key,
+                    message=(
+                        "Reader-facing document repeats a substantial block already present "
+                        f"in '{owner}'."
+                    ),
+                    repairable=False,
+                    origin="deterministic",
+                )
+            )
+            break
+    return findings
+
+
+def _markdown_blocks(markdown: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] = []
+    for raw_line in (markdown or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                block = _normalize_block("\n".join(current))
+                if _is_material_block(block):
+                    blocks.append(block)
+                current = []
+            continue
+        if line.startswith("#"):
+            continue
+        current.append(line)
+    if current:
+        block = _normalize_block("\n".join(current))
+        if _is_material_block(block):
+            blocks.append(block)
+    return blocks
+
+
+def _normalize_block(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _is_material_block(value: str) -> bool:
+    return len(value) >= 300 and not value.startswith("### sources")
 
 
 def _json_object(value: str) -> dict[str, Any]:

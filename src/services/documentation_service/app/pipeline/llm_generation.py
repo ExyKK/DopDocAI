@@ -375,6 +375,16 @@ def _post_process_section_markdown(
             }
         )
 
+    body, removed_sources = _strip_model_sources_appendix(body)
+    if removed_sources:
+        warnings.append(
+            {
+                "code": "model_sources_appendix_removed",
+                "severity": "info",
+                "message": "Model returned a Sources appendix despite instructions; pipeline-owned appendix was kept.",
+            }
+        )
+
     body = body.strip()
     if not body:
         body = "No documentation content was generated."
@@ -416,6 +426,14 @@ def _strip_leading_headings(markdown: str) -> tuple[str, bool]:
             continue
         break
     return "\n".join(lines).strip(), removed
+
+
+def _strip_model_sources_appendix(markdown: str) -> tuple[str, bool]:
+    pattern = re.compile(r"(?im)^#{2,6}\s*(sources|references|источники|ссылки)\s*$")
+    matches = list(pattern.finditer(markdown or ""))
+    if not matches:
+        return markdown, False
+    return markdown[: matches[-1].start()].rstrip(), True
 
 
 def _detect_text_warnings(markdown: str) -> list[dict[str, str]]:

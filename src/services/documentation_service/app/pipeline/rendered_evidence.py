@@ -6,6 +6,7 @@ from app.pipeline.evidence_pack import EvidencePack, EvidencePackSource, estimat
 
 RENDERED_EVIDENCE_PACK_VERSION = 1
 _MAX_TABLE_ROWS = 24
+_MAX_API_SURFACE_ROWS = 80
 _MAX_LIST_ROWS = 40
 _MAX_CELL_LENGTH = 140
 _MAX_RETRIEVAL_CHARS = 6000
@@ -249,6 +250,8 @@ def _render_structured_value(artifact_kind: str, key: str, value: Any) -> str:
         return _render_edges(value)
     if key == "http_surface":
         return _render_http_surface(value)
+    if key == "api_surface_inventory":
+        return _render_api_surface_inventory(value)
     if key == "api_specs":
         return _render_api_specs(value)
     if key in {"env_vars", "flags", "config_files", "config_structs", "data_contracts", "dependency_locks"}:
@@ -346,6 +349,137 @@ def _render_api_specs(value: Any) -> str:
         for row in rows[:_MAX_TABLE_ROWS]
     ]
     return _section_with_table("API specs", headers, table, rows)
+
+
+def _render_api_surface_inventory(value: Any) -> str:
+    if not isinstance(value, dict):
+        return _render_generic_value("API surface inventory", value)
+
+    lines = ["API surface inventory:"]
+    summary = value.get("summary") if isinstance(value.get("summary"), dict) else {}
+    if summary:
+        lines.extend(
+            [
+                f"- routes_total: {_cell(summary.get('routes_total'))}",
+                f"- route_services: {_join(summary.get('route_services'), limit=16)}",
+                f"- api_specs_total: {_cell(summary.get('api_specs_total'))}",
+                f"- api_spec_services: {_join(summary.get('api_spec_services'), limit=16)}",
+                f"- data_contracts_total: {_cell(summary.get('data_contracts_total'))}",
+            ]
+        )
+        note = _cell(summary.get("note"))
+        if note:
+            lines.append(f"- note: {note}")
+
+    routes = _as_dicts(value.get("routes"))
+    if routes:
+        lines.extend(
+            [
+                "",
+                *_limited_table(
+                    "Runtime routes",
+                    ["method", "path", "service", "handler", "file"],
+                    [
+                        [
+                            row.get("method"),
+                            row.get("path"),
+                            row.get("service"),
+                            row.get("handler"),
+                            row.get("file_path"),
+                        ]
+                        for row in routes[:_MAX_API_SURFACE_ROWS]
+                    ],
+                    len(routes),
+                    _MAX_API_SURFACE_ROWS,
+                ),
+            ]
+        )
+
+    specs = _as_dicts(value.get("api_specs"))
+    if specs:
+        lines.extend(
+            [
+                "",
+                *_limited_table(
+                    "API specs",
+                    ["path", "service", "kind", "paths", "operations"],
+                    [
+                        [
+                            row.get("path"),
+                            row.get("service"),
+                            row.get("spec_kind") or row.get("format"),
+                            row.get("paths_total"),
+                            row.get("operations_total"),
+                        ]
+                        for row in specs[:_MAX_API_SURFACE_ROWS]
+                    ],
+                    len(specs),
+                    _MAX_API_SURFACE_ROWS,
+                ),
+            ]
+        )
+
+        operations: list[dict[str, Any]] = []
+        for spec in specs:
+            spec_path = _cell(spec.get("path"))
+            service = _cell(spec.get("service"))
+            for operation in _as_dicts(spec.get("operations")):
+                if len(operations) >= _MAX_API_SURFACE_ROWS:
+                    break
+                item = dict(operation)
+                item["spec_path"] = spec_path
+                item["service"] = service
+                operations.append(item)
+            if len(operations) >= _MAX_API_SURFACE_ROWS:
+                break
+
+        if operations:
+            lines.extend(
+                [
+                    "",
+                    *_limited_table(
+                        "OpenAPI operations",
+                        ["method", "path", "service", "operation", "summary"],
+                        [
+                            [
+                                row.get("method"),
+                                row.get("path"),
+                                row.get("service"),
+                                row.get("operation_id"),
+                                row.get("summary"),
+                            ]
+                            for row in operations
+                        ],
+                        sum(len(_as_dicts(spec.get("operations"))) for spec in specs),
+                        _MAX_API_SURFACE_ROWS,
+                    ),
+                ]
+            )
+
+    contracts = _as_dicts(value.get("data_contracts"))
+    if contracts:
+        lines.extend(
+            [
+                "",
+                *_limited_table(
+                    "API/data contracts",
+                    ["name", "kind", "service", "fields"],
+                    [
+                        [
+                            row.get("name"),
+                            row.get("model_kind"),
+                            row.get("service"),
+                            _field_names(row.get("fields")),
+                        ]
+                        for row in contracts[:_MAX_API_SURFACE_ROWS]
+                    ],
+                    len(contracts),
+                    _MAX_API_SURFACE_ROWS,
+                ),
+            ]
+        )
+
+    return "\n".join(lines)
 
 
 def _render_config_rows(key: str, value: Any) -> str:
@@ -545,6 +679,23 @@ def _section_with_table(title: str, headers: list[str], rows: list[list[Any]], o
     else:
         lines.append("- no rows")
     return "\n".join(lines)
+
+
+def _limited_table(
+    title: str,
+    headers: list[str],
+    rows: list[list[Any]],
+    total_rows: int,
+    limit: int,
+) -> list[str]:
+    lines = [f"{title}:"]
+    if rows:
+        lines.extend(["", *_table(headers, rows)])
+        if total_rows > limit:
+            lines.extend(["", f"_Omitted {total_rows - limit} additional rows from rendered evidence._"])
+    else:
+        lines.append("- no rows")
+    return lines
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> list[str]:

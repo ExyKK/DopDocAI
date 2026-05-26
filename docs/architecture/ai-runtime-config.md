@@ -27,13 +27,13 @@ DOPDOC_LLM_PROVIDER_OPTIONS_JSON=
 DOPDOC_LLM_PROVIDER_MAX_PRICE_PROMPT=
 DOPDOC_LLM_PROVIDER_MAX_PRICE_COMPLETION=
 
-DOPDOC_DOCS_LLM_MAX_TOKENS=4096
+DOPDOC_DOCS_LLM_MAX_TOKENS=8192
 DOPDOC_DOCS_OUTPUT_LANGUAGE=ru
-DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS=120000
-DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS=16000
-DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES=80
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_TOKENS=250000
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCE_TOKENS=32000
+DOPDOC_DOCS_EVIDENCE_PACK_MAX_SOURCES=120
 DOPDOC_DOCS_VERIFICATION_MODE=hybrid
-DOPDOC_DOCS_MAX_REPAIR_ROUNDS=2
+DOPDOC_DOCS_MAX_REPAIR_ROUNDS=1
 DOPDOC_DOCS_LLM_CALL_MAX_ATTEMPTS=3
 DOPDOC_DOCS_LLM_CALL_RETRY_DELAY_S=1
 DOPDOC_DOCS_LLM_JSON_MODE_ENABLED=true
@@ -88,7 +88,9 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 length, while ChatService keeps the shared `DOPDOC_LLM_MAX_TOKENS` default.
 Judge calls use JSON object mode by default, and generation/judge/repair LLM
 calls retry locally before the job-level retry is used. Trace artifacts are also
-on by default for manual debugging. For OpenRouter routing experiments, put a
+on by default for manual debugging. The MVP documentation pipeline favors richer
+first-pass evidence over repeated repair; after one LLM-assisted repair it uses
+deterministic final hygiene checks. For OpenRouter routing experiments, put a
 JSON provider object into `DOPDOC_LLM_PROVIDER_OPTIONS_JSON`, for example
 `{"sort":"throughput"}`, and use the max price knobs to produce
 `provider.max_price`.
