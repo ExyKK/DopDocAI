@@ -14,6 +14,29 @@ VerificationStatus = Literal["passed", "passed_with_warnings", "failed"]
 VERIFICATION_REPORT_SCHEMA_VERSION = 1
 _CITATION_RE = re.compile(r"\[(S\d+)\]")
 _SHA_RE = re.compile(r"\b[0-9a-f]{10,40}\b", re.IGNORECASE)
+_VALID_JUDGE_STATUSES = {"passed", "passed_with_warnings", "failed"}
+_JUDGE_STATUS_ALIASES = {
+    "passed": "passed",
+    "pass": "passed",
+    "ok": "passed",
+    "success": "passed",
+    "passed_with_warnings": "passed_with_warnings",
+    "passed_with_warning": "passed_with_warnings",
+    "warning": "passed_with_warnings",
+    "warnings": "passed_with_warnings",
+    "partial": "passed_with_warnings",
+    "failed": "failed",
+    "fail": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "errors": "failed",
+    "needs_changes": "failed",
+    "needs_change": "failed",
+    "changes_requested": "failed",
+    "changes_required": "failed",
+    "requires_changes": "failed",
+    "requested_changes": "failed",
+}
 
 
 class DocumentationVerificationError(RuntimeError):
@@ -724,8 +747,20 @@ def _parse_judge_json(content: str) -> dict[str, Any]:
             retryable=True,
             details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
-    status = payload.get("status")
-    if status not in {"passed", "passed_with_warnings", "failed"}:
+    findings = _judge_findings_value(payload)
+    status = _normalize_judge_status(payload.get("status"))
+    if status is None:
+        status = _normalize_judge_status(payload.get("verdict"))
+    if status is None:
+        status = _infer_judge_status_from_findings(findings)
+
+    payload = dict(payload)
+    if status is not None:
+        payload["status"] = status
+    if findings is not None:
+        payload["findings"] = _normalize_judge_findings(findings, status=status)
+
+    if status not in _VALID_JUDGE_STATUSES:
         raise LlmProviderError(
             "Verification judge JSON response must contain a valid status.",
             error_code="verification_judge_invalid_response",
@@ -748,6 +783,70 @@ def _parse_judge_json(content: str) -> dict[str, Any]:
             details={"raw_response_excerpt": _truncate(stripped, 1024)},
         )
     return payload
+
+
+def _judge_findings_value(payload: dict[str, Any]) -> Any:
+    if "findings" in payload:
+        return payload.get("findings")
+    for key in ("issues", "errors", "problems"):
+        value = payload.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_judge_status(value: Any) -> str | None:
+    text = _optional_str(value)
+    if text is None:
+        return None
+    key = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return _JUDGE_STATUS_ALIASES.get(key)
+
+
+def _infer_judge_status_from_findings(findings: Any) -> str | None:
+    if not isinstance(findings, list) or not findings:
+        return None
+    severities: set[str] = set()
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        severity = _optional_str(item.get("severity"))
+        if severity:
+            severities.add(severity.lower())
+    if "error" in severities:
+        return "failed"
+    return "passed_with_warnings"
+
+
+def _normalize_judge_findings(findings: Any, *, status: str | None) -> Any:
+    if not isinstance(findings, list):
+        return findings
+    return [_normalize_judge_finding_payload(item, status=status) for item in findings]
+
+
+def _normalize_judge_finding_payload(item: Any, *, status: str | None) -> Any:
+    if not isinstance(item, dict):
+        return item
+
+    normalized = dict(item)
+    if not _optional_str(normalized.get("message")):
+        for key in ("detail", "description", "issue", "reason"):
+            text = _optional_str(normalized.get(key))
+            if text:
+                normalized["message"] = text
+                break
+
+    if not _optional_str(normalized.get("category")):
+        for key in ("type", "kind"):
+            text = _optional_str(normalized.get(key))
+            if text:
+                normalized["category"] = text
+                break
+
+    if status == "failed" and not _optional_str(normalized.get("severity")):
+        normalized["severity"] = "error"
+
+    return normalized
 
 
 def _findings_from_judge(

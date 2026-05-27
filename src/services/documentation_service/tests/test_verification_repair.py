@@ -321,6 +321,53 @@ def test_invalid_judge_json_retries_and_uses_json_mode() -> None:
     assert report.judge_calls[0].retry_errors[0]["error_code"] == "verification_judge_invalid_response"
 
 
+def test_judge_parser_normalizes_common_llm_contract_drift() -> None:
+    provider = _JsonProvider(
+        [
+            {
+                "status": "fail",
+                "scores": {"accuracy": 0.45},
+                "findings": [
+                    {
+                        "severity": "error",
+                        "category": "unsupported_claim",
+                        "detail": "Section claim lacks cited evidence.",
+                    }
+                ],
+            },
+            {
+                "verdict": "needs_changes",
+                "issues": [
+                    {
+                        "type": "unsupported_claim",
+                        "description": "Document set repeats an unsupported claim.",
+                    }
+                ],
+            },
+        ]
+    )
+    section = _section("public_api", "Public API", "Public API content [S1].")
+    contract = _contract("public_api", "Public API", source_ids=["S1"])
+
+    report = DocumentationVerifier(provider, mode="llm", max_attempts=1).verify(
+        documentation_run_id="run-1",
+        repository_id="repo-1",
+        snapshot_id="snapshot-1",
+        template_kind="developer_handbook",
+        requested_template_kind="developer_handbook",
+        sections=[section],
+        documents=[_document(section)],
+        manifest=_manifest(section),
+        contracts=[contract],
+    )
+
+    messages = [item.message for item in report.findings if item.origin == "llm_judge"]
+    assert report.status == "failed"
+    assert "Section claim lacks cited evidence." in messages
+    assert "Document set repeats an unsupported claim." in messages
+    assert provider.generated_total == 2
+
+
 def test_judge_failed_status_requires_findings() -> None:
     provider = _JsonProvider([{"status": "failed", "scores": {}, "findings": []}])
     section = _section("overview", "Overview", "Описание проекта [S1].")
