@@ -8,6 +8,8 @@ from git import Repo
 
 from app.infra.git_client import GitClient
 
+_REGULAR_FILE_MODES = {"100644", "100755"}
+
 
 @dataclass(frozen=True)
 class SnapshotFileCounters:
@@ -134,6 +136,7 @@ def _parse_ls_tree_line(line: str) -> HeadTreeFile | None:
     if len(parts) != 5:
         return None
 
+    file_mode = parts[0]
     object_type = parts[1]
     size_text = parts[3]
     path = parts[4]
@@ -143,7 +146,7 @@ def _parse_ls_tree_line(line: str) -> HeadTreeFile | None:
     except ValueError:
         size = 0
 
-    if object_type != "blob":
+    if object_type != "blob" or file_mode not in _REGULAR_FILE_MODES:
         return None
 
     return HeadTreeFile(path=path, size=size, object_type=object_type)
