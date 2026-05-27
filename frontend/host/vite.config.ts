@@ -35,35 +35,10 @@ export default defineConfig({
         port: 5173,
         strictPort: true,
         proxy: {
-            "/api/ingest": {
-                target: "http://api.dopdocai.lab",
+            "/api": {
+                target: "http://localhost:18000",
                 changeOrigin: true,
                 secure: false,
-                rewrite: (p) => p.replace(/^\/api/, ""), // /api/ingest/repo -> /ingest/repo
-            },
-            "/api/chats": {
-                target: "http://api.dopdocai.lab",
-                changeOrigin: true,
-                secure: false,
-                rewrite: (p) => p.replace(/^\/api/, ""), // /api/chats -> /chats
-            },
-            "/api/repos": {
-                target: "http://api.dopdocai.lab",
-                changeOrigin: true,
-                secure: false,
-                rewrite: (p) => p.replace(/^\/api/, ""), // /api/repos -> /repos
-            },
-            "/api/repo-index-states": {
-                target: "http://api.dopdocai.lab",
-                changeOrigin: true,
-                secure: false,
-                rewrite: (p) => p.replace(/^\/api/, ""), // /api/repos -> /repos
-            },
-            "/api/v1/auth": {
-                target: "http://api.dopdocai.lab",
-                changeOrigin: true,
-                secure: false,
-                rewrite: (p) => p.replace(/^\/api/, ""), // /api/repos -> /repos
             },
         },
     },

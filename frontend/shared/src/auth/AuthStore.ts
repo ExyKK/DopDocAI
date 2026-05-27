@@ -6,7 +6,7 @@ import type {AuthResponse, LoginRequest, RegisterRequest} from "../types/api";
 
 export class AuthStore {
     token: string | null = storage.getToken();
-    userId: number | null = storage.getUserId();
+    userId: string | null = storage.getUserId();
     email: string | null = storage.getEmail();
 
     initializing = true;

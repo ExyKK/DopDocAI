@@ -92,6 +92,28 @@ public sealed class JobRunApplicationService
         return run;
     }
 
+    public async Task<PagedIndexRunResult> ListIndexRunsAsync(
+        Guid userId,
+        Guid repositoryId,
+        RepositoryPagination pagination,
+        CancellationToken ct)
+    {
+        await EnsureRepositoryVisibleAsync(userId, repositoryId, ct);
+
+        var query = _db.IndexRuns
+            .AsNoTracking()
+            .Where(x => x.RepositoryId == repositoryId);
+
+        var total = await query.CountAsync(ct);
+        var items = await query
+            .OrderByDescending(x => x.CreatedAt)
+            .Skip(pagination.Offset)
+            .Take(pagination.Limit)
+            .ToListAsync(ct);
+
+        return new PagedIndexRunResult(items, total, pagination.Limit, pagination.Offset);
+    }
+
     public async Task<DocumentationRunCreateResult> CreateDocumentationRunAsync(
         Guid userId,
         Guid repositoryId,
@@ -169,6 +191,41 @@ public sealed class JobRunApplicationService
             throw DocumentationRunNotFound(documentationRunId);
 
         return run;
+    }
+
+    public async Task<PagedDocumentationRunResult> ListDocumentationRunsAsync(
+        Guid userId,
+        Guid repositoryId,
+        RepositoryPagination pagination,
+        CancellationToken ct)
+    {
+        await EnsureRepositoryVisibleAsync(userId, repositoryId, ct);
+
+        var query = _db.DocumentationRuns
+            .AsNoTracking()
+            .Where(x => x.RepositoryId == repositoryId);
+
+        var total = await query.CountAsync(ct);
+        var items = await query
+            .OrderByDescending(x => x.CreatedAt)
+            .Skip(pagination.Offset)
+            .Take(pagination.Limit)
+            .ToListAsync(ct);
+
+        return new PagedDocumentationRunResult(items, total, pagination.Limit, pagination.Offset);
+    }
+
+    private async Task EnsureRepositoryVisibleAsync(Guid userId, Guid repositoryId, CancellationToken ct)
+    {
+        var exists = await _db.UserRepositories
+            .AsNoTracking()
+            .AnyAsync(x => x.UserId == userId &&
+                           x.RepositoryId == repositoryId &&
+                           x.Repository.ArchivedAt == null,
+                ct);
+
+        if (!exists)
+            throw RepositoryNotFound(repositoryId);
     }
 
     private Task<IndexRun?> FindActiveIndexRunAsync(Guid repositoryId, CancellationToken ct)

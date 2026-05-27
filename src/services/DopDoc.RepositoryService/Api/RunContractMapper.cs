@@ -92,6 +92,26 @@ internal static class RunContractMapper
             UpdatedAt: run.UpdatedAt);
     }
 
+    public static PagedResponse<IndexRunResponse> ToPagedResponse(PagedIndexRunResult page)
+    {
+        return new PagedResponse<IndexRunResponse>(
+            Items: page.Items.Select(ToResponse).ToList(),
+            Limit: page.Limit,
+            Offset: page.Offset,
+            HasMore: page.HasMore,
+            TotalCount: page.TotalCount);
+    }
+
+    public static PagedResponse<DocumentationRunResponse> ToPagedResponse(PagedDocumentationRunResult page)
+    {
+        return new PagedResponse<DocumentationRunResponse>(
+            Items: page.Items.Select(ToResponse).ToList(),
+            Limit: page.Limit,
+            Offset: page.Offset,
+            HasMore: page.HasMore,
+            TotalCount: page.TotalCount);
+    }
+
     public static CreateDocumentationRunCommand ToCommand(CreateDocumentationRunRequest request)
     {
         return new CreateDocumentationRunCommand(

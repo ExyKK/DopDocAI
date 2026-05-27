@@ -1,4 +1,4 @@
-// All endpoints live here so backend changes are edited in ONE place.
+// All public API paths are rooted at axios baseURL `/api`.
 
 export const endpoints = {
     auth: {
@@ -6,20 +6,28 @@ export const endpoints = {
         refresh: "/v1/auth/refresh",
         register: "/v1/auth/register",
     },
-    repos: {
-        list: (userId: number) => `/repos/${userId}/list`,
-        get: (repoId: number) => `/repos/${repoId}`,
+    repositories: {
+        index: "/v1/repositories/index",
+        list: "/v1/repositories",
+        get: (repositoryId: string) => `/v1/repositories/${repositoryId}`,
+        readySnapshot: (repositoryId: string) => `/v1/repositories/${repositoryId}/snapshots/ready`,
+        indexRuns: (repositoryId: string) => `/v1/repositories/${repositoryId}/index-runs`,
+        documentationRuns: (repositoryId: string) => `/v1/repositories/${repositoryId}/documentation-runs`,
+        createDocumentationRun: (repositoryId: string) => `/v1/repositories/${repositoryId}/documentation`,
     },
-    repoIndexStates: {
-        createOrGet: "/repo-index-states",
-        get: (stateId: number) => `/repo-index-states/${stateId}`,
-        patch: (stateId: number) => `/repo-index-states/${stateId}`,
+    indexRuns: {
+        get: (runId: string) => `/v1/index-runs/${runId}`,
     },
-    ingest: "/ingest/repo",
+    documentationRuns: {
+        get: (runId: string) => `/v1/documentation-runs/${runId}`,
+        artifacts: (runId: string) => `/v1/documentation-runs/${runId}/artifacts`,
+        artifactContent: (runId: string, artifactId: string) =>
+            `/v1/documentation-runs/${runId}/artifacts/${artifactId}/content`,
+    },
     chats: {
-        list: "/chats",
-        create: "/chats",
-        messages: (chatId: string) => `/chats/${chatId}/messages`,
-        send: (chatId: string) => `/chats/${chatId}/messages`,
+        list: "/v1/chats",
+        create: "/v1/chats",
+        messages: (chatId: string) => `/v1/chats/${chatId}/messages`,
+        send: (chatId: string) => `/v1/chats/${chatId}/messages`,
     },
 };

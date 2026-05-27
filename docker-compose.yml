@@ -447,6 +447,8 @@ services:
       Jobs__MaxAttempts: 3
       Jobs__LeaseSeconds: 120
       Jobs__HeartbeatSeconds: 15
+      ObjectStorage__Endpoint: http://minio:9000
+      ObjectStorage__MaxReadableBytes: 20000000
 
       Health__Ready__Postgres__Enabled: true
       Health__Ready__Postgres__ConnectionName: RepoDb

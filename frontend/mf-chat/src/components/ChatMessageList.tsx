@@ -1,14 +1,9 @@
 import React, { useCallback, useState } from "react";
-import { Box, IconButton, Tooltip } from "@mui/material";
+import { Box, Chip, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import type { ChatMessage, ChatMessageSource } from "@rag/shared";
 
-import {MarkdownRenderer} from "./MarkdownRenderer";
-
-export type ChatMessageVM = {
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-};
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 async function copyToClipboard(text: string) {
     try {
@@ -26,14 +21,24 @@ async function copyToClipboard(text: string) {
     }
 }
 
+function sourceLabel(source: ChatMessageSource) {
+    const label = source.citation_label ? `${source.citation_label} ` : "";
+    const path = source.file_path ?? source.symbol_name ?? source.source_kind;
+    const range =
+        source.start_line != null
+            ? `:${source.start_line}${source.end_line != null && source.end_line !== source.start_line ? `-${source.end_line}` : ""}`
+            : "";
+    return `${label}${path}${range}`;
+}
+
 export function ChatMessageList({
-                                    messages,
-                                    loading,
-                                    bottomRef,
-                                }: {
-    messages: ChatMessageVM[];
+    messages,
+    loading,
+    bottomRef,
+}: {
+    messages: ChatMessage[];
     loading: boolean;
-    bottomRef: React.RefObject<HTMLDivElement>;
+    bottomRef: React.RefObject<HTMLDivElement | null>;
 }) {
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -47,13 +52,20 @@ export function ChatMessageList({
 
     return (
         <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", pr: 1, opacity: loading ? 0.7 : 1 }}>
-            {messages.map((m) => {
-                const isAssistant = m.role === "assistant";
-                const isUser = m.role === "user";
+            {messages.length === 0 && !loading && (
+                <Typography color="text.secondary" sx={{ py: 4 }}>
+                    Ask a question about this repository to start a grounded chat.
+                </Typography>
+            )}
+
+            {messages.map((message) => {
+                const isAssistant = message.role === "assistant";
+                const isUser = message.role === "user";
+                const sources = (message.sources ?? []).filter((source) => source.used_in_answer).slice(0, 6);
 
                 return (
                     <Box
-                        key={m.id}
+                        key={message.id}
                         sx={{
                             mb: 2,
                             display: "flex",
@@ -63,12 +75,11 @@ export function ChatMessageList({
                     >
                         <Box
                             sx={{
-                                maxWidth: "900px",
+                                maxWidth: "min(940px, 100%)",
                                 width: "fit-content",
                                 p: 1.5,
                                 borderRadius: 2,
                                 border: "1px solid rgba(255,255,255,0.12)",
-
                                 backgroundColor: isUser ? "rgba(144, 202, 249, 0.12)" : "transparent",
                                 borderColor: isUser ? "rgba(144, 202, 249, 0.25)" : "rgba(255,255,255,0.12)",
                             }}
@@ -81,18 +92,25 @@ export function ChatMessageList({
                                     "& li:last-child": { mb: 0 },
                                 }}
                             >
-                                <MarkdownRenderer>{m.content}</MarkdownRenderer>
+                                <MarkdownRenderer>{message.content_markdown}</MarkdownRenderer>
                             </Box>
                         </Box>
 
                         {isAssistant && (
-                            <Box sx={{ mt: 0.75, maxWidth: "900px", width: "fit-content", display: "flex", gap: 1 }}>
-                                <Tooltip title={copiedId === m.id ? "Copied" : "Copy"}>
-                                    <IconButton size="small" onClick={() => void onCopy(m.id, m.content)}>
+                            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 0.75, maxWidth: "940px" }}>
+                                <Tooltip title={copiedId === message.id ? "Copied" : "Copy"}>
+                                    <IconButton
+                                        size="small"
+                                        onClick={() => void onCopy(message.id, message.content_markdown)}
+                                        aria-label="Copy assistant answer"
+                                    >
                                         <ContentCopyIcon fontSize="inherit" />
                                     </IconButton>
                                 </Tooltip>
-                            </Box>
+                                {sources.map((source) => (
+                                    <Chip key={`${message.id}-${source.ordinal}`} size="small" label={sourceLabel(source)} />
+                                ))}
+                            </Stack>
                         )}
                     </Box>
                 );

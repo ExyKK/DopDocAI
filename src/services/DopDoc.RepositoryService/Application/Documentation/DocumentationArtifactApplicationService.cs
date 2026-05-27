@@ -137,6 +137,21 @@ public sealed class DocumentationArtifactApplicationService
             .ToListAsync(ct);
     }
 
+    public async Task<DocumentationArtifact> GetAsync(
+        Guid documentationRunId,
+        Guid artifactId,
+        CancellationToken ct)
+    {
+        var artifact = await _db.DocumentationArtifacts
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.DocumentationRunId == documentationRunId && x.Id == artifactId, ct);
+
+        if (artifact is null)
+            throw DocumentationArtifactNotFound(documentationRunId, artifactId);
+
+        return artifact;
+    }
+
     private static void ValidateCommand(RegisterDocumentationArtifactCommand command)
     {
         if (command.SizeBytes < 0)
@@ -238,5 +253,12 @@ public sealed class DocumentationArtifactApplicationService
         return new NotFoundException(
             $"Documentation section {sectionKey} was not found for run {documentationRunId}.",
             errorCode: "documentation_section_not_found");
+    }
+
+    private static NotFoundException DocumentationArtifactNotFound(Guid documentationRunId, Guid artifactId)
+    {
+        return new NotFoundException(
+            $"Documentation artifact {artifactId} was not found for run {documentationRunId}.",
+            errorCode: "documentation_artifact_not_found");
     }
 }

@@ -101,6 +101,36 @@ public static class RepositoryEndpoints
         })
         .WithName("GetReadyRepositorySnapshot");
 
+        g.MapGet("/{repository_id:guid}/index-runs", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            JobRunApplicationService jobs,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = RepositoryPagination.Validate(limit, offset);
+            var page = await jobs.ListIndexRunsAsync(userId, repositoryId, pagination, ct);
+            return TypedResults.Ok(RunContractMapper.ToPagedResponse(page));
+        })
+        .WithName("ListRepositoryIndexRuns");
+
+        g.MapGet("/{repository_id:guid}/documentation-runs", async (
+            [FromRoute(Name = "repository_id")] Guid repositoryId,
+            [FromQuery] int? limit,
+            [FromQuery] int? offset,
+            IUserContextAccessor userContext,
+            JobRunApplicationService jobs,
+            CancellationToken ct) =>
+        {
+            var userId = userContext.GetRequiredUserId();
+            var pagination = RepositoryPagination.Validate(limit, offset);
+            var page = await jobs.ListDocumentationRunsAsync(userId, repositoryId, pagination, ct);
+            return TypedResults.Ok(RunContractMapper.ToPagedResponse(page));
+        })
+        .WithName("ListRepositoryDocumentationRuns");
+
         g.MapPost("/{repository_id:guid}/documentation", async (
             [FromRoute(Name = "repository_id")] Guid repositoryId,
             CreateDocumentationRunRequest request,

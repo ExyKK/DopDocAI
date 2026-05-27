@@ -22,13 +22,12 @@ export const storage = {
         emit(TOKEN_EVENT);
     },
 
-    getUserId(): number | null {
-        const v = localStorage.getItem(USER_ID_KEY);
-        return v ? Number(v) : null;
+    getUserId(): string | null {
+        return localStorage.getItem(USER_ID_KEY);
     },
-    setUserId(userId: number | null) {
+    setUserId(userId: string | null) {
         if (userId == null) localStorage.removeItem(USER_ID_KEY);
-        else localStorage.setItem(USER_ID_KEY, String(userId));
+        else localStorage.setItem(USER_ID_KEY, userId);
         emit(USER_EVENT);
     },
 

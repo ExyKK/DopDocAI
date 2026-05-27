@@ -1,50 +1,49 @@
-import {UUID, RepoIndexStatus, MessageRole} from "./domain";
+import type { ChatMessage, UUID } from "./domain";
 
-export interface RepoIngestRequest {
-    repo_url: string;
-    branch?: string | null;
-    user_id: number;
+export interface PagedResponse<TItem> {
+    items: TItem[];
+    limit: number;
+    offset: number;
+    has_more: boolean;
+    total_count: number;
 }
 
-export interface RepoIngestResponse {
-    repo: string;
-    vectors_upserted: number;
-    repository_id: number;
-    repo_index_state_id: number;
-    status: RepoIndexStatus;
+export interface IndexRepositoryRequest {
+    repository_url: string;
+    selected_branch?: string | null;
 }
 
-export interface RepoIndexStateCreateIn {
-    user_id: number;
-    repository_id: number;
-    branch?: string | null;
-    qdrant_collection: string;
-}
-
-export type ChatResponse = {
+export interface RunAcceptedResponse {
     id: UUID;
-    repo_id: number;
-    user_id: number;
-};
+    kind: "index" | "documentation" | string;
+    status: string;
+    stage: string;
+    repository_id: UUID;
+    snapshot_id: UUID | null;
+    status_url: string;
+    stream_url: string;
+}
 
-export type MessageResponse = {
-    id: UUID;
-    chat_id: UUID;
-    role: MessageRole;
+export interface CreateDocumentationRunRequest {
+    snapshot_id?: UUID | null;
+    template_kind?: string | null;
+    base_snapshot_id?: UUID | null;
+}
+
+export interface CreateChatRequest {
+    repository_id: UUID;
+    snapshot_id?: UUID | null;
+    title?: string | null;
+}
+
+export interface SendMessageRequest {
     content: string;
-};
+}
 
-export type SendMessageRequest = {
-    content: string;
-};
-
-export type SendMessageResponse = {
-    user_message: MessageResponse;
-    assistant_message: MessageResponse;
-    model: string;
-    provider: string;
-    finish_reason?: string | null;
-};
+export interface SendMessageResponse {
+    user_message: ChatMessage;
+    assistant_message: ChatMessage;
+}
 
 export interface LoginRequest {
     email: string;
@@ -60,7 +59,6 @@ export interface AuthResponse {
     access_token: string;
     token_type: "bearer" | string;
     expires_in: number;
-    user_id: number;
+    user_id: UUID;
     email: string;
 }
-

@@ -50,6 +50,12 @@ public static class RepositoryServiceSetup
             .Validate(x => x.LeaseSeconds > 0, "Jobs:LeaseSeconds must be greater than 0")
             .Validate(x => x.HeartbeatSeconds > 0, "Jobs:HeartbeatSeconds must be greater than 0")
             .ValidateOnStart();
+        services.AddOptions<DocumentationObjectStorageOptions>()
+            .Bind(config.GetSection("ObjectStorage"))
+            .Validate(x => !string.IsNullOrWhiteSpace(x.Endpoint), "ObjectStorage:Endpoint must be set.")
+            .Validate(x => x.MaxReadableBytes > 0, "ObjectStorage:MaxReadableBytes must be greater than 0.")
+            .ValidateOnStart();
+        services.AddHttpClient<DocumentationObjectStorageReader>();
         services.AddScoped<RepositoryApplicationService>();
         services.AddScoped<RepositorySnapshotApplicationService>();
         services.AddScoped<AnalysisArtifactApplicationService>();

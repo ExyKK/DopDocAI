@@ -1,31 +1,40 @@
-import {makeAutoObservable, runInAction, toJS} from "mobx";
-import {api, endpoints, authStore} from "@rag/shared";
+import { makeAutoObservable, runInAction } from "mobx";
+import { api, endpoints } from "@rag/shared";
 import type {
+    IndexRepositoryRequest,
+    IndexRun,
+    PagedResponse,
     Repository,
-    RepoIndexState,
-    RepoIngestRequest,
-    RepoIngestResponse,
+    RunAcceptedResponse,
 } from "@rag/shared";
 
+export type RepositoryListItem = Repository & {
+    latest_index_run?: IndexRun | null;
+};
+
+function isActive(status?: string | null) {
+    return status === "queued" || status === "running";
+}
+
 export class RepoStore {
-    repos: Repository[] = [];
+    repos: RepositoryListItem[] = [];
+    activeIndexRunIds = new Set<string>();
 
     loadingList = false;
     loadingStatuses = false;
-
+    indexing = false;
     error: string | null = null;
 
     private statusTimer: number | null = null;
     private statusesInFlight = false;
 
     constructor() {
-        makeAutoObservable(this);
+        makeAutoObservable(this, {}, { autoBind: true });
     }
 
     async init() {
         await this.loadReposList();
         this.startStatusPolling();
-        void this.refreshStatuses({ ensureStateId: false });
     }
 
     async loadReposList() {
@@ -33,51 +42,81 @@ export class RepoStore {
         this.error = null;
 
         try {
-            if (!authStore?.userId) throw new Error("User fucked");
+            const res = await api.get<PagedResponse<Repository>>(endpoints.repositories.list, {
+                params: { limit: 100, offset: 0 },
+            });
+            const repos = res.data.items;
+            const withRuns = await Promise.all(repos.map((repo) => this.loadLatestIndexRun(repo)));
 
-            const res = await api.get<Repository[]>(endpoints.repos.list(authStore.userId));
             runInAction(() => {
-                this.repos = res.data;
+                this.repos = withRuns;
+                this.activeIndexRunIds = new Set(
+                    withRuns
+                        .map((repo) => repo.latest_index_run)
+                        .filter((run): run is IndexRun => Boolean(run && isActive(run.status)))
+                        .map((run) => run.id),
+                );
                 this.loadingList = false;
             });
-        } catch (e) {
+        } catch {
             runInAction(() => {
                 this.loadingList = false;
                 this.error = "Failed to load repositories";
             });
-            throw e;
         }
     }
 
-    async refreshStatuses(opts?: { ensureStateId?: boolean }) {
+    async refreshStatuses() {
         if (this.statusesInFlight) return;
-        if (this.repos.length === 0) return;
+        if (this.repos.length === 0 && this.activeIndexRunIds.size === 0) return;
 
         this.statusesInFlight = true;
         this.loadingStatuses = true;
 
         try {
-            const updates = await Promise.all(
-                this.repos.map(async (repo) => {
-                    let state = repo.index_state;
-                    const res = await api.get<RepoIndexState>(endpoints.repoIndexStates.get(state.id));
-                    return { repoId: repo.id, state: res.data };
-                })
+            const runIds = Array.from(this.activeIndexRunIds);
+            const runResults = await Promise.all(
+                runIds.map(async (runId) => {
+                    const res = await api.get<IndexRun>(endpoints.indexRuns.get(runId));
+                    return res.data;
+                }),
+            );
+
+            const repoRefreshIds = new Set(
+                runResults
+                    .filter((run) => run.status === "succeeded")
+                    .map((run) => run.repository_id),
+            );
+            const repoResults = await Promise.all(
+                Array.from(repoRefreshIds).map(async (repositoryId) => {
+                    const res = await api.get<Repository>(endpoints.repositories.get(repositoryId));
+                    return res.data;
+                }),
             );
 
             runInAction(() => {
-                const byRepoId = new Map(updates.filter(Boolean).map((u) => [u!.repoId, u!.state]));
-                this.repos = this.repos.map((r) => {
-                    const nextState = byRepoId.get(r.id);
-                    return nextState ? { ...r, index_state: nextState } : r;
+                const runsByRepo = new Map(runResults.map((run) => [run.repository_id, run]));
+                const refreshedRepos = new Map(repoResults.map((repo) => [repo.id, repo]));
+                this.repos = this.repos.map((repo) => {
+                    const refreshed = refreshedRepos.get(repo.id);
+                    const run = runsByRepo.get(repo.id) ?? repo.latest_index_run ?? null;
+                    return {
+                        ...(refreshed ?? repo),
+                        latest_index_run: run,
+                    };
                 });
+                this.activeIndexRunIds = new Set(
+                    runResults
+                        .filter((run) => isActive(run.status))
+                        .map((run) => run.id),
+                );
+                this.loadingStatuses = false;
             });
-        } catch {
         } finally {
+            this.statusesInFlight = false;
             runInAction(() => {
                 this.loadingStatuses = false;
             });
-            this.statusesInFlight = false;
         }
     }
 
@@ -94,38 +133,66 @@ export class RepoStore {
         this.statusTimer = null;
     }
 
-    async startIndexing(url: string, default_branch: string | null = null) {
+    async startIndexing(url: string, selectedBranch: string | null = null) {
         this.error = null;
+        this.indexing = true;
 
-        if (!authStore?.userId) throw new Error("User fucked");
+        try {
+            const payload: IndexRepositoryRequest = {
+                repository_url: url,
+                selected_branch: selectedBranch || null,
+            };
+            const indexRes = await api.post<RunAcceptedResponse>(endpoints.repositories.index, payload);
+            const repoRes = await api.get<Repository>(endpoints.repositories.get(indexRes.data.repository_id));
+            const runRes = await api.get<IndexRun>(endpoints.indexRuns.get(indexRes.data.id));
 
-        const ingestPayload: RepoIngestRequest = {
-            repo_url: url,
-            branch: default_branch,
-            user_id: authStore.userId,
-        };
+            const repo: RepositoryListItem = {
+                ...repoRes.data,
+                latest_index_run: runRes.data,
+            };
 
-        const ingestRes = await api.post<RepoIngestResponse>(endpoints.ingest, ingestPayload);
+            runInAction(() => {
+                const idx = this.repos.findIndex((item) => item.id === repo.id);
+                if (idx >= 0) {
+                    this.repos = [repo, ...this.repos.slice(0, idx), ...this.repos.slice(idx + 1)];
+                } else {
+                    this.repos = [repo, ...this.repos];
+                }
+                if (isActive(runRes.data.status)) {
+                    this.activeIndexRunIds.add(runRes.data.id);
+                }
+                this.indexing = false;
+            });
 
-        const repoId = ingestRes.data.repository_id;
-        const repoRes = await api.get<Repository>(endpoints.repos.get(repoId), {params: { user_id: authStore.userId }});
-        const repo = repoRes.data;
-
-        runInAction(() => {
-            const idx = this.repos.findIndex((r) => r.id === repo.id);
-            if (idx >= 0) {
-                this.repos = [repo, ...this.repos.slice(0, idx), ...this.repos.slice(idx + 1)];
-            } else {
-                this.repos = [repo, ...this.repos];
-            }
-        });
-
-        this.startStatusPolling();
-
-        return repo;
+            this.startStatusPolling();
+            return repo;
+        } catch (error) {
+            runInAction(() => {
+                this.indexing = false;
+                this.error = "Failed to start indexing";
+            });
+            throw error;
+        }
     }
 
     dispose() {
         this.stopStatusPolling();
+    }
+
+    private async loadLatestIndexRun(repo: Repository): Promise<RepositoryListItem> {
+        try {
+            const res = await api.get<PagedResponse<IndexRun>>(endpoints.repositories.indexRuns(repo.id), {
+                params: { limit: 1, offset: 0 },
+            });
+            return {
+                ...repo,
+                latest_index_run: res.data.items[0] ?? null,
+            };
+        } catch {
+            return {
+                ...repo,
+                latest_index_run: null,
+            };
+        }
     }
 }

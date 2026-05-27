@@ -1571,7 +1571,7 @@
 ### MVP-001 — Подключить публичный demo flow через Gateway
 - Priority: `P0`
 - Depends on: `GATEWAY-001`, `GATEWAY-002`, `REPO-005`, `CHAT-003`, `DOCS-030`
-- Status: `planned`
+- Status: `completed`
 - Goal: frontend должен иметь единый публичный путь к основным сценариям без прямого знания internal service URLs.
 - Tasks:
 - пробросить через EdgeGateway необходимые routes для repositories, index runs, documentation runs, documentation artifacts and chat;
@@ -1582,11 +1582,16 @@
 - frontend может работать через один base URL;
 - основные сценарии не требуют ручной подстановки `X-User-Id` из клиента;
 - legacy repos/chats endpoints не нужны для demo flow.
+- Notes:
+- EdgeGateway existing `/api/v1/repositories`, `/api/v1/index-runs`, `/api/v1/documentation-runs`, `/api/v1/chats` routes now cover the demo flow;
+- RepositoryService exposes public per-repository index/documentation run lists plus documentation artifact list/content endpoints, with user access checked before artifact metadata/object reads;
+- RepositoryService can proxy readable documentation artifacts from MinIO through public API using configured `ObjectStorage` endpoint, so frontend no longer needs direct MinIO/Postgres access;
+- frontend Vite proxies now target the local Gateway at `http://localhost:18000` through a single `/api` base path.
 
 ### MVP-002 — Реализовать frontend MVP для repository workspace
 - Priority: `P0`
 - Depends on: `MVP-001`, `DOCS-031`
-- Status: `planned`
+- Status: `completed`
 - Goal: получить жизнеспособный UI для дипломной демонстрации: индексировать репозиторий, генерировать документацию, читать artifacts и задавать вопросы по snapshot.
 - Tasks:
 - сделать основной экран repository workspace: add GitHub URL, repository list/status, active snapshot/index run status;
@@ -1600,6 +1605,11 @@
 - результаты documentation run доступны без похода в MinIO/Postgres;
 - чат показывает ответ и источники по текущему snapshot;
 - UI достаточно стабилен для ручного тестирования корпуса репозиториев.
+- Notes:
+- shared frontend contracts were switched from legacy numeric repo/chat DTOs to `/api/v1` UUID-based RepositoryService/ChatService DTOs;
+- repository sidebar supports add/index, repository selection and live index status polling;
+- repository workspace supports documentation run start/status/progress, artifact navigation, Markdown viewing and chat with visible retrieved sources;
+- frontend auth storage now keeps `user_id` as GUID string, matching the C# AuthService contract.
 
 ### MVP-003 — Финальный ручной прогон и corpus checklist
 - Priority: `P0`
